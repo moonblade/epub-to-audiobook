@@ -83,12 +83,17 @@
         const jobStatus = document.getElementById('job-status');
 
         let eventSource = null;
+        const seenLogs = new Set();
 
         function connectSSE() {
+            logsContainer.innerHTML = '';
             eventSource = new EventSource(`/jobs/${jobId}/logs`);
             
             eventSource.addEventListener('log', (e) => {
                 const data = JSON.parse(e.data);
+                const logKey = `${data.timestamp}|${data.message}`;
+                if (seenLogs.has(logKey)) return;
+                seenLogs.add(logKey);
                 addLogEntry(data);
                 updateProgress(data.progress);
             });
