@@ -104,9 +104,6 @@
                 jobStatus.className = `value status-badge status-${status}`;
                 addLogEntry({ level: 'info', message: `Conversion ${status}`, timestamp: new Date().toISOString() });
                 eventSource.close();
-                if (status === 'completed') {
-                    location.reload();
-                }
             });
 
             eventSource.addEventListener('ping', () => {});
