@@ -8,6 +8,7 @@ from typing import Optional
 
 import numpy as np
 import soundfile as sf
+from pydub import AudioSegment
 from ebooklib import epub, ITEM_DOCUMENT
 from bs4 import BeautifulSoup
 from kokoro_onnx import Kokoro
@@ -15,6 +16,7 @@ from kokoro_onnx import Kokoro
 from config import MODEL_FILE, VOICES_FILE, MODEL_URL, VOICES_URL, MODELS_PATH
 from models import JobState, JobStatus, LogEvent
 from job_manager import JobManager
+from log_store import LogStore
 
 
 def download_models() -> bool:
@@ -107,10 +109,12 @@ class ConversionJob:
         job_state: JobState,
         job_manager: JobManager,
         log_queue: asyncio.Queue[LogEvent],
+        log_store: LogStore,
     ):
         self.job_state = job_state
         self.job_manager = job_manager
         self.log_queue = log_queue
+        self.log_store = log_store
         self.should_stop = Event()
         self.kokoro: Optional[Kokoro] = None
 
@@ -122,6 +126,7 @@ class ConversionJob:
             chapter=chapter,
             chunk=chunk,
         )
+        self.log_store.append(self.job_state.job_id, event)
         try:
             self.log_queue.put_nowait(event)
         except asyncio.QueueFull:
@@ -222,15 +227,21 @@ class ConversionJob:
             
             for chapter_num in sorted(chapter_audio.keys()):
                 samples = chapter_audio[chapter_num]
-                chapter_file = output_dir / f"chapter_{chapter_num:03d}.wav"
-                sf.write(str(chapter_file), np.array(samples), sample_rate)
+                chapter_wav = output_dir / f"chapter_{chapter_num:03d}.wav"
+                chapter_mp3 = output_dir / f"chapter_{chapter_num:03d}.mp3"
+                sf.write(str(chapter_wav), np.array(samples), sample_rate)
+                AudioSegment.from_wav(str(chapter_wav)).export(str(chapter_mp3), format="mp3", bitrate="192k")
+                chapter_wav.unlink()
                 all_samples.extend(samples)
-                self._emit_log("info", f"Saved {chapter_file.name}")
+                self._emit_log("info", f"Saved {chapter_mp3.name}")
             
             if all_samples:
-                full_file = output_dir / "full.wav"
-                sf.write(str(full_file), np.array(all_samples), sample_rate)
-                self._emit_log("info", f"Saved {full_file.name}")
+                full_wav = output_dir / "full.wav"
+                full_mp3 = output_dir / "full.mp3"
+                sf.write(str(full_wav), np.array(all_samples), sample_rate)
+                AudioSegment.from_wav(str(full_wav)).export(str(full_mp3), format="mp3", bitrate="192k")
+                full_wav.unlink()
+                self._emit_log("info", f"Saved {full_mp3.name}")
             
             self.job_manager.update_job(job_id, status=JobStatus.COMPLETED, progress=100.0)
             self._emit_log("info", "Conversion completed!", progress=100.0)

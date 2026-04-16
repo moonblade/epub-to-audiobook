@@ -16,6 +16,7 @@ from config import UPLOAD_PATH, OUTPUT_PATH, JOBS_PATH, TEMPLATES_PATH, STATIC_P
 from models import JobStatus, JobResponse, UploadResponse, VoiceOption, VOICE_DISPLAY_NAMES, LogEvent
 from job_manager import JobManager
 from converter import ConversionJob
+from log_store import LogStore
 from logger import logger
 
 app = FastAPI(title="EPUB to Audio Converter")
@@ -24,6 +25,7 @@ app.mount("/static", StaticFiles(directory=str(STATIC_PATH)), name="static")
 templates = Jinja2Templates(directory=str(TEMPLATES_PATH))
 
 job_manager = JobManager(JOBS_PATH)
+log_store = LogStore(JOBS_PATH)
 executor = ThreadPoolExecutor(max_workers=2)
 
 active_jobs: dict[str, ConversionJob] = {}
@@ -109,7 +111,7 @@ async def upload_epub(
     log_queue: asyncio.Queue[LogEvent] = asyncio.Queue(maxsize=1000)
     log_queues[job_id] = log_queue
     
-    conversion_job = ConversionJob(job_state, job_manager, log_queue)
+    conversion_job = ConversionJob(job_state, job_manager, log_queue, log_store)
     active_jobs[job_id] = conversion_job
     
     executor.submit(lambda: conversion_job.run())
@@ -190,7 +192,7 @@ async def resume_job(
     log_queue = log_queues.get(job_id) or asyncio.Queue(maxsize=1000)
     log_queues[job_id] = log_queue
     
-    conversion_job = ConversionJob(job, job_manager, log_queue)
+    conversion_job = ConversionJob(job, job_manager, log_queue, log_store)
     active_jobs[job_id] = conversion_job
     
     executor.submit(lambda: conversion_job.run())
@@ -212,6 +214,8 @@ async def delete_job(job_id: str):
     if job_id in log_queues:
         del log_queues[job_id]
     
+    log_store.delete(job_id)
+    
     if job.epub_path and Path(job.epub_path).exists():
         Path(job.epub_path).unlink()
     
@@ -230,6 +234,21 @@ async def stream_logs(job_id: str):
         raise HTTPException(status_code=404, detail="Job not found")
     
     async def event_generator():
+        stored_logs = log_store.get_all(job_id)
+        for event in stored_logs:
+            yield {
+                "event": "log",
+                "data": event.model_dump_json(),
+            }
+        
+        current_job = job_manager.get_job(job_id)
+        if current_job and current_job.status in [JobStatus.COMPLETED, JobStatus.FAILED]:
+            yield {
+                "event": "done",
+                "data": current_job.status,
+            }
+            return
+        
         queue = log_queues.get(job_id)
         if not queue:
             queue = asyncio.Queue(maxsize=1000)
@@ -274,14 +293,14 @@ async def download_audio(job_id: str):
     if not job:
         raise HTTPException(status_code=404, detail="Job not found")
     
-    full_audio = Path(job.output_dir) / "full.wav"
+    full_audio = Path(job.output_dir) / "full.mp3"
     if not full_audio.exists():
         raise HTTPException(status_code=404, detail="Audio file not found")
     
     return FileResponse(
         str(full_audio),
-        media_type="audio/wav",
-        filename=f"{job.epub_filename.replace('.epub', '')}.wav",
+        media_type="audio/mpeg",
+        filename=f"{job.epub_filename.replace('.epub', '')}.mp3",
     )
 
 
@@ -291,14 +310,14 @@ async def download_chapter_audio(job_id: str, chapter: int):
     if not job:
         raise HTTPException(status_code=404, detail="Job not found")
     
-    chapter_audio = Path(job.output_dir) / f"chapter_{chapter:03d}.wav"
+    chapter_audio = Path(job.output_dir) / f"chapter_{chapter:03d}.mp3"
     if not chapter_audio.exists():
         raise HTTPException(status_code=404, detail="Chapter audio not found")
     
     return FileResponse(
         str(chapter_audio),
-        media_type="audio/wav",
-        filename=f"{job.epub_filename.replace('.epub', '')}_chapter_{chapter}.wav",
+        media_type="audio/mpeg",
+        filename=f"{job.epub_filename.replace('.epub', '')}_chapter_{chapter}.mp3",
     )
 
 

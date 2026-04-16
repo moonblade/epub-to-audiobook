@@ -24,7 +24,7 @@
                     <input type="file" id="file-input" name="file" accept=".epub" hidden>
                 </div>
                 
-                <div class="form-row">
+                <div class="form-row voice-row">
                     <label for="voice-select">Voice:</label>
                     <select id="voice-select" name="voice">
                         <optgroup label="🇺🇸 US Male">
@@ -48,6 +48,7 @@
                             {% endfor %}
                         </optgroup>
                     </select>
+                    <button type="button" class="btn-sample" id="btn-sample" onclick="playSample()">🔊 Preview</button>
                 </div>
 
                 <div class="form-row" id="file-info" style="display: none;">
@@ -110,12 +111,35 @@
         </section>
     </div>
 
+    <audio id="sample-audio" preload="none"></audio>
     <script>
         const dropZone = document.getElementById('drop-zone');
         const fileInput = document.getElementById('file-input');
         const uploadForm = document.getElementById('upload-form');
         const btnUpload = document.getElementById('btn-upload');
         const fileInfo = document.getElementById('file-info');
+        const voiceSelect = document.getElementById('voice-select');
+        const sampleAudio = document.getElementById('sample-audio');
+        const btnSample = document.getElementById('btn-sample');
+
+        function playSample() {
+            const voice = voiceSelect.value;
+            const src = `/static/samples/${voice}.mp3`;
+            if (sampleAudio.src.endsWith(src) && !sampleAudio.paused) {
+                sampleAudio.pause();
+                btnSample.textContent = '🔊 Preview';
+                return;
+            }
+            sampleAudio.src = src;
+            sampleAudio.play().catch(() => {
+                alert('Sample not available. Run: python generate_samples.py');
+            });
+            btnSample.textContent = '⏹️ Stop';
+        }
+
+        sampleAudio.addEventListener('ended', () => {
+            btnSample.textContent = '🔊 Preview';
+        });
 
         dropZone.addEventListener('click', () => fileInput.click());
 

@@ -1,4 +1,4 @@
-.PHONY: setup run install clean download-models test lint logs
+.PHONY: setup run install clean download-models test lint logs samples
 
 PYTHON := python3.12
 VENV := .venv
@@ -29,6 +29,9 @@ download-models:
 
 run: setup
 	$(BIN)/uvicorn main:app --reload --host 0.0.0.0 --port $(PORT)
+
+samples: setup
+	$(BIN)/python generate_samples.py
 
 logs:
 	@mkdir -p $(LOG_DIR)
