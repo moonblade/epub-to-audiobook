@@ -1,0 +1,443 @@
+* {
+    box-sizing: border-box;
+    margin: 0;
+    padding: 0;
+}
+
+body {
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, sans-serif;
+    background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%);
+    color: #eee;
+    min-height: 100vh;
+    line-height: 1.6;
+}
+
+.container {
+    max-width: 900px;
+    margin: 0 auto;
+    padding: 2rem;
+}
+
+header {
+    text-align: center;
+    margin-bottom: 2rem;
+}
+
+header h1 {
+    font-size: 2.5rem;
+    margin-bottom: 0.5rem;
+}
+
+header p {
+    color: #888;
+}
+
+.back-link {
+    display: inline-block;
+    color: #4a9eff;
+    text-decoration: none;
+    margin-bottom: 1rem;
+}
+
+.back-link:hover {
+    text-decoration: underline;
+}
+
+.subtitle {
+    color: #4a9eff;
+    font-weight: 500;
+}
+
+.upload-section {
+    background: rgba(255,255,255,0.05);
+    border-radius: 16px;
+    padding: 2rem;
+    margin-bottom: 2rem;
+}
+
+.drop-zone {
+    border: 2px dashed #444;
+    border-radius: 12px;
+    padding: 3rem 2rem;
+    text-align: center;
+    cursor: pointer;
+    transition: all 0.3s ease;
+}
+
+.drop-zone:hover, .drop-zone.drag-over {
+    border-color: #4a9eff;
+    background: rgba(74, 158, 255, 0.1);
+}
+
+.drop-zone.has-file {
+    border-color: #4ade80;
+    background: rgba(74, 222, 128, 0.1);
+}
+
+.drop-icon {
+    font-size: 3rem;
+    display: block;
+    margin-bottom: 1rem;
+}
+
+.drop-zone .small {
+    color: #666;
+    font-size: 0.9rem;
+}
+
+.form-row {
+    display: flex;
+    align-items: center;
+    gap: 1rem;
+    margin-top: 1.5rem;
+}
+
+.form-row label {
+    font-weight: 500;
+}
+
+.form-row select {
+    flex: 1;
+    padding: 0.75rem 1rem;
+    border-radius: 8px;
+    border: 1px solid #333;
+    background: #1a1a2e;
+    color: #eee;
+    font-size: 1rem;
+}
+
+#file-info {
+    background: rgba(74, 222, 128, 0.1);
+    padding: 0.75rem 1rem;
+    border-radius: 8px;
+    justify-content: space-between;
+}
+
+.file-name {
+    color: #4ade80;
+}
+
+.btn-clear {
+    background: none;
+    border: none;
+    color: #888;
+    cursor: pointer;
+    font-size: 1.2rem;
+}
+
+.btn-upload {
+    width: 100%;
+    margin-top: 1.5rem;
+    padding: 1rem;
+    font-size: 1.1rem;
+    font-weight: 600;
+    border: none;
+    border-radius: 10px;
+    background: linear-gradient(135deg, #4a9eff 0%, #7c3aed 100%);
+    color: white;
+    cursor: pointer;
+    transition: all 0.3s ease;
+}
+
+.btn-upload:hover:not(:disabled) {
+    transform: translateY(-2px);
+    box-shadow: 0 8px 25px rgba(74, 158, 255, 0.3);
+}
+
+.btn-upload:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+}
+
+.jobs-section {
+    background: rgba(255,255,255,0.05);
+    border-radius: 16px;
+    padding: 2rem;
+}
+
+.jobs-section h2 {
+    margin-bottom: 1.5rem;
+}
+
+.jobs-table {
+    width: 100%;
+    border-collapse: collapse;
+}
+
+.jobs-table th, .jobs-table td {
+    padding: 1rem;
+    text-align: left;
+    border-bottom: 1px solid #333;
+}
+
+.jobs-table th {
+    color: #888;
+    font-weight: 500;
+    font-size: 0.9rem;
+    text-transform: uppercase;
+}
+
+.filename {
+    max-width: 200px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.status {
+    text-transform: capitalize;
+    font-weight: 500;
+}
+
+.status-pending { color: #888; }
+.status-running { color: #4a9eff; }
+.status-paused { color: #fbbf24; }
+.status-completed { color: #4ade80; }
+.status-failed { color: #f87171; }
+
+.progress-bar {
+    background: #333;
+    border-radius: 10px;
+    height: 24px;
+    position: relative;
+    overflow: hidden;
+}
+
+.progress-bar.large {
+    height: 32px;
+    margin: 1rem 0;
+}
+
+.progress-fill {
+    background: linear-gradient(90deg, #4a9eff, #7c3aed);
+    height: 100%;
+    border-radius: 10px;
+    transition: width 0.3s ease;
+}
+
+.progress-text {
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%);
+    font-size: 0.8rem;
+    font-weight: 600;
+}
+
+.actions {
+    display: flex;
+    gap: 0.5rem;
+}
+
+.btn-action {
+    width: 36px;
+    height: 36px;
+    border: none;
+    border-radius: 8px;
+    background: rgba(255,255,255,0.1);
+    color: #eee;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    text-decoration: none;
+    font-size: 1rem;
+    transition: all 0.2s ease;
+}
+
+.btn-action:hover {
+    background: rgba(255,255,255,0.2);
+    transform: scale(1.1);
+}
+
+.btn-stop:hover { background: rgba(251, 191, 36, 0.3); }
+.btn-resume:hover { background: rgba(74, 222, 128, 0.3); }
+.btn-download:hover { background: rgba(74, 158, 255, 0.3); }
+.btn-delete:hover { background: rgba(248, 113, 113, 0.3); }
+
+.no-jobs {
+    text-align: center;
+    color: #666;
+    padding: 2rem;
+}
+
+.status-section {
+    background: rgba(255,255,255,0.05);
+    border-radius: 16px;
+    padding: 2rem;
+    margin-bottom: 2rem;
+}
+
+.status-card {
+    display: flex;
+    gap: 2rem;
+    flex-wrap: wrap;
+}
+
+.status-item {
+    display: flex;
+    flex-direction: column;
+    gap: 0.25rem;
+}
+
+.status-item .label {
+    color: #888;
+    font-size: 0.9rem;
+}
+
+.status-item .value {
+    font-weight: 600;
+    font-size: 1.1rem;
+}
+
+.status-badge {
+    display: inline-block;
+    padding: 0.25rem 0.75rem;
+    border-radius: 20px;
+    font-size: 0.9rem;
+    text-transform: capitalize;
+}
+
+.status-badge.status-running { background: rgba(74, 158, 255, 0.2); }
+.status-badge.status-paused { background: rgba(251, 191, 36, 0.2); }
+.status-badge.status-completed { background: rgba(74, 222, 128, 0.2); }
+.status-badge.status-failed { background: rgba(248, 113, 113, 0.2); }
+
+.action-buttons {
+    display: flex;
+    gap: 1rem;
+    margin-top: 1.5rem;
+}
+
+.btn {
+    padding: 0.75rem 1.5rem;
+    border: none;
+    border-radius: 8px;
+    font-size: 1rem;
+    font-weight: 500;
+    cursor: pointer;
+    text-decoration: none;
+    display: inline-flex;
+    align-items: center;
+    gap: 0.5rem;
+    transition: all 0.2s ease;
+}
+
+.btn-stop {
+    background: rgba(251, 191, 36, 0.2);
+    color: #fbbf24;
+}
+
+.btn-resume {
+    background: rgba(74, 222, 128, 0.2);
+    color: #4ade80;
+}
+
+.btn-download {
+    background: rgba(74, 158, 255, 0.2);
+    color: #4a9eff;
+}
+
+.btn:hover {
+    transform: translateY(-2px);
+}
+
+.logs-section {
+    background: rgba(255,255,255,0.05);
+    border-radius: 16px;
+    padding: 2rem;
+    margin-bottom: 2rem;
+}
+
+.logs-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 1rem;
+}
+
+.auto-scroll-toggle {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    color: #888;
+    cursor: pointer;
+}
+
+.logs-container {
+    background: #0d0d14;
+    border-radius: 8px;
+    padding: 1rem;
+    height: 400px;
+    overflow-y: auto;
+    font-family: 'Monaco', 'Menlo', monospace;
+    font-size: 0.9rem;
+}
+
+.log-entry {
+    padding: 0.5rem;
+    border-radius: 4px;
+    margin-bottom: 0.25rem;
+    display: flex;
+    gap: 1rem;
+}
+
+.log-entry .timestamp {
+    color: #666;
+    min-width: 80px;
+}
+
+.log-entry.info .message { color: #eee; }
+.log-entry.warning .message { color: #fbbf24; }
+.log-entry.error .message { color: #f87171; }
+
+.chapters-section {
+    background: rgba(255,255,255,0.05);
+    border-radius: 16px;
+    padding: 2rem;
+}
+
+.chapters-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(120px, 1fr));
+    gap: 0.75rem;
+    margin-top: 1rem;
+}
+
+.chapter-link {
+    padding: 0.75rem 1rem;
+    background: rgba(74, 158, 255, 0.1);
+    border-radius: 8px;
+    color: #4a9eff;
+    text-decoration: none;
+    text-align: center;
+    transition: all 0.2s ease;
+}
+
+.chapter-link:hover {
+    background: rgba(74, 158, 255, 0.2);
+    transform: translateY(-2px);
+}
+
+@media (max-width: 600px) {
+    .container {
+        padding: 1rem;
+    }
+    
+    header h1 {
+        font-size: 1.8rem;
+    }
+    
+    .status-card {
+        flex-direction: column;
+        gap: 1rem;
+    }
+    
+    .jobs-table {
+        font-size: 0.9rem;
+    }
+    
+    .jobs-table th, .jobs-table td {
+        padding: 0.75rem 0.5rem;
+    }
+}

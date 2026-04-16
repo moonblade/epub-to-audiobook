@@ -1,0 +1,225 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>EPUB to Audio Converter</title>
+    <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1>📚 EPUB to Audio Converter</h1>
+            <p>Convert your ebooks to audiobooks using AI voice synthesis</p>
+        </header>
+
+        <section class="upload-section">
+            <form id="upload-form" enctype="multipart/form-data">
+                <div class="drop-zone" id="drop-zone">
+                    <div class="drop-zone-content">
+                        <span class="drop-icon">📁</span>
+                        <p>Drag & drop your EPUB file here</p>
+                        <p class="small">or click to browse</p>
+                    </div>
+                    <input type="file" id="file-input" name="file" accept=".epub" hidden>
+                </div>
+                
+                <div class="form-row">
+                    <label for="voice-select">Voice:</label>
+                    <select id="voice-select" name="voice">
+                        <optgroup label="🇺🇸 US Male">
+                            {% for voice, name in voices.items() if voice.startswith('am_') %}
+                            <option value="{{ voice }}" {% if voice == default_voice %}selected{% endif %}>{{ name }}</option>
+                            {% endfor %}
+                        </optgroup>
+                        <optgroup label="🇺🇸 US Female">
+                            {% for voice, name in voices.items() if voice.startswith('af_') %}
+                            <option value="{{ voice }}">{{ name }}</option>
+                            {% endfor %}
+                        </optgroup>
+                        <optgroup label="🇬🇧 UK Male">
+                            {% for voice, name in voices.items() if voice.startswith('bm_') %}
+                            <option value="{{ voice }}">{{ name }}</option>
+                            {% endfor %}
+                        </optgroup>
+                        <optgroup label="🇬🇧 UK Female">
+                            {% for voice, name in voices.items() if voice.startswith('bf_') %}
+                            <option value="{{ voice }}">{{ name }}</option>
+                            {% endfor %}
+                        </optgroup>
+                    </select>
+                </div>
+
+                <div class="form-row" id="file-info" style="display: none;">
+                    <span class="file-name"></span>
+                    <button type="button" class="btn-clear" onclick="clearFile()">✕</button>
+                </div>
+
+                <button type="submit" class="btn-upload" id="btn-upload" disabled>
+                    <span>🎙️ Convert to Audio</span>
+                </button>
+            </form>
+        </section>
+
+        <section class="jobs-section">
+            <h2>Conversion Jobs</h2>
+            <div id="jobs-list">
+                {% if jobs %}
+                <table class="jobs-table">
+                    <thead>
+                        <tr>
+                            <th>File</th>
+                            <th>Voice</th>
+                            <th>Status</th>
+                            <th>Progress</th>
+                            <th>Actions</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {% for job in jobs %}
+                        <tr data-job-id="{{ job.job_id }}">
+                            <td class="filename">{{ job.epub_filename }}</td>
+                            <td>{{ job.voice }}</td>
+                            <td class="status status-{{ job.status }}">{{ job.status }}</td>
+                            <td>
+                                <div class="progress-bar">
+                                    <div class="progress-fill" style="width: {{ job.progress }}%"></div>
+                                    <span class="progress-text">{{ "%.1f"|format(job.progress) }}%</span>
+                                </div>
+                            </td>
+                            <td class="actions">
+                                {% if job.status == 'running' %}
+                                <button onclick="stopJob('{{ job.job_id }}')" class="btn-action btn-stop">⏸️</button>
+                                {% elif job.status == 'paused' or job.status == 'failed' %}
+                                <button onclick="resumeJob('{{ job.job_id }}')" class="btn-action btn-resume">▶️</button>
+                                {% endif %}
+                                {% if job.status == 'completed' %}
+                                <a href="/jobs/{{ job.job_id }}/audio" class="btn-action btn-download">⬇️</a>
+                                {% endif %}
+                                <a href="/jobs/{{ job.job_id }}/logs-page" class="btn-action btn-logs">📋</a>
+                                <button onclick="deleteJob('{{ job.job_id }}')" class="btn-action btn-delete">🗑️</button>
+                            </td>
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+                {% else %}
+                <p class="no-jobs">No conversion jobs yet. Upload an EPUB to get started!</p>
+                {% endif %}
+            </div>
+        </section>
+    </div>
+
+    <script>
+        const dropZone = document.getElementById('drop-zone');
+        const fileInput = document.getElementById('file-input');
+        const uploadForm = document.getElementById('upload-form');
+        const btnUpload = document.getElementById('btn-upload');
+        const fileInfo = document.getElementById('file-info');
+
+        dropZone.addEventListener('click', () => fileInput.click());
+
+        dropZone.addEventListener('dragover', (e) => {
+            e.preventDefault();
+            dropZone.classList.add('drag-over');
+        });
+
+        dropZone.addEventListener('dragleave', () => {
+            dropZone.classList.remove('drag-over');
+        });
+
+        dropZone.addEventListener('drop', (e) => {
+            e.preventDefault();
+            dropZone.classList.remove('drag-over');
+            const files = e.dataTransfer.files;
+            if (files.length && files[0].name.endsWith('.epub')) {
+                fileInput.files = files;
+                showFileInfo(files[0]);
+            }
+        });
+
+        fileInput.addEventListener('change', () => {
+            if (fileInput.files.length) {
+                showFileInfo(fileInput.files[0]);
+            }
+        });
+
+        function showFileInfo(file) {
+            fileInfo.style.display = 'flex';
+            fileInfo.querySelector('.file-name').textContent = file.name;
+            btnUpload.disabled = false;
+            dropZone.classList.add('has-file');
+        }
+
+        function clearFile() {
+            fileInput.value = '';
+            fileInfo.style.display = 'none';
+            btnUpload.disabled = true;
+            dropZone.classList.remove('has-file');
+        }
+
+        uploadForm.addEventListener('submit', async (e) => {
+            e.preventDefault();
+            const formData = new FormData(uploadForm);
+            btnUpload.disabled = true;
+            btnUpload.innerHTML = '<span>⏳ Uploading...</span>';
+
+            try {
+                const response = await fetch('/upload', {
+                    method: 'POST',
+                    body: formData
+                });
+                const result = await response.json();
+                if (response.ok) {
+                    window.location.href = `/jobs/${result.job_id}/logs-page`;
+                } else {
+                    alert(result.detail || 'Upload failed');
+                    btnUpload.disabled = false;
+                    btnUpload.innerHTML = '<span>🎙️ Convert to Audio</span>';
+                }
+            } catch (error) {
+                alert('Upload failed: ' + error.message);
+                btnUpload.disabled = false;
+                btnUpload.innerHTML = '<span>🎙️ Convert to Audio</span>';
+            }
+        });
+
+        async function stopJob(jobId) {
+            await fetch(`/jobs/${jobId}/stop`, { method: 'POST' });
+            location.reload();
+        }
+
+        async function resumeJob(jobId) {
+            await fetch(`/jobs/${jobId}/resume`, { method: 'POST' });
+            location.reload();
+        }
+
+        async function deleteJob(jobId) {
+            if (confirm('Delete this job and all its files?')) {
+                await fetch(`/jobs/${jobId}`, { method: 'DELETE' });
+                location.reload();
+            }
+        }
+
+        setInterval(async () => {
+            try {
+                const response = await fetch('/jobs');
+                const jobs = await response.json();
+                updateJobsTable(jobs);
+            } catch (e) {}
+        }, 5000);
+
+        function updateJobsTable(jobs) {
+            jobs.forEach(job => {
+                const row = document.querySelector(`tr[data-job-id="${job.job_id}"]`);
+                if (row) {
+                    row.querySelector('.status').textContent = job.status;
+                    row.querySelector('.status').className = `status status-${job.status}`;
+                    row.querySelector('.progress-fill').style.width = `${job.progress}%`;
+                    row.querySelector('.progress-text').textContent = `${job.progress.toFixed(1)}%`;
+                }
+            });
+        }
+    </script>
+</body>
+</html>

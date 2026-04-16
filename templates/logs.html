@@ -1,0 +1,162 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Conversion Logs - {{ job.epub_filename }}</title>
+    <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+    <div class="container">
+        <header>
+            <a href="/" class="back-link">← Back to Home</a>
+            <h1>📋 Conversion Logs</h1>
+            <p class="subtitle">{{ job.epub_filename }}</p>
+        </header>
+
+        <section class="status-section">
+            <div class="status-card">
+                <div class="status-item">
+                    <span class="label">Status:</span>
+                    <span class="value status-badge status-{{ job.status }}" id="job-status">{{ job.status }}</span>
+                </div>
+                <div class="status-item">
+                    <span class="label">Voice:</span>
+                    <span class="value">{{ job.voice }}</span>
+                </div>
+                <div class="status-item">
+                    <span class="label">Progress:</span>
+                    <span class="value" id="progress-text">{{ "%.1f"|format(job.progress) }}%</span>
+                </div>
+            </div>
+
+            <div class="progress-bar large">
+                <div class="progress-fill" id="progress-bar" style="width: {{ job.progress }}%"></div>
+            </div>
+
+            <div class="action-buttons">
+                {% if job.status == 'running' %}
+                <button onclick="stopJob()" class="btn btn-stop" id="btn-stop">⏸️ Pause</button>
+                {% elif job.status == 'paused' or job.status == 'failed' %}
+                <button onclick="resumeJob()" class="btn btn-resume" id="btn-resume">▶️ Resume</button>
+                {% endif %}
+                {% if job.status == 'completed' %}
+                <a href="/jobs/{{ job.job_id }}/audio" class="btn btn-download">⬇️ Download Full Audio</a>
+                {% endif %}
+            </div>
+        </section>
+
+        <section class="logs-section">
+            <div class="logs-header">
+                <h2>Live Logs</h2>
+                <label class="auto-scroll-toggle">
+                    <input type="checkbox" id="auto-scroll" checked>
+                    Auto-scroll
+                </label>
+            </div>
+            <div class="logs-container" id="logs-container">
+                <div class="log-entry info">
+                    <span class="timestamp">--:--:--</span>
+                    <span class="message">Connecting to log stream...</span>
+                </div>
+            </div>
+        </section>
+
+        {% if job.status == 'completed' %}
+        <section class="chapters-section">
+            <h2>Download Chapters</h2>
+            <div class="chapters-grid">
+                {% for i in range(1, job.total_chapters + 1) %}
+                <a href="/jobs/{{ job.job_id }}/audio/{{ i }}" class="chapter-link">
+                    Chapter {{ i }}
+                </a>
+                {% endfor %}
+            </div>
+        </section>
+        {% endif %}
+    </div>
+
+    <script>
+        const jobId = '{{ job.job_id }}';
+        const logsContainer = document.getElementById('logs-container');
+        const autoScrollCheckbox = document.getElementById('auto-scroll');
+        const progressBar = document.getElementById('progress-bar');
+        const progressText = document.getElementById('progress-text');
+        const jobStatus = document.getElementById('job-status');
+
+        let eventSource = null;
+
+        function connectSSE() {
+            eventSource = new EventSource(`/jobs/${jobId}/logs`);
+            
+            eventSource.addEventListener('log', (e) => {
+                const data = JSON.parse(e.data);
+                addLogEntry(data);
+                updateProgress(data.progress);
+            });
+
+            eventSource.addEventListener('done', (e) => {
+                const status = e.data;
+                jobStatus.textContent = status;
+                jobStatus.className = `value status-badge status-${status}`;
+                addLogEntry({ level: 'info', message: `Conversion ${status}`, timestamp: new Date().toISOString() });
+                eventSource.close();
+                if (status === 'completed') {
+                    location.reload();
+                }
+            });
+
+            eventSource.addEventListener('ping', () => {});
+
+            eventSource.onerror = () => {
+                addLogEntry({ level: 'warning', message: 'Connection lost. Reconnecting...', timestamp: new Date().toISOString() });
+                eventSource.close();
+                setTimeout(connectSSE, 3000);
+            };
+        }
+
+        function addLogEntry(data) {
+            const entry = document.createElement('div');
+            entry.className = `log-entry ${data.level}`;
+            
+            const time = new Date(data.timestamp).toLocaleTimeString();
+            entry.innerHTML = `
+                <span class="timestamp">${time}</span>
+                <span class="message">${data.message}</span>
+            `;
+            
+            logsContainer.appendChild(entry);
+            
+            if (autoScrollCheckbox.checked) {
+                logsContainer.scrollTop = logsContainer.scrollHeight;
+            }
+        }
+
+        function updateProgress(progress) {
+            if (progress > 0) {
+                progressBar.style.width = `${progress}%`;
+                progressText.textContent = `${progress.toFixed(1)}%`;
+            }
+        }
+
+        async function stopJob() {
+            await fetch(`/jobs/${jobId}/stop`, { method: 'POST' });
+            location.reload();
+        }
+
+        async function resumeJob() {
+            await fetch(`/jobs/${jobId}/resume`, { method: 'POST' });
+            location.reload();
+        }
+
+        logsContainer.addEventListener('scroll', () => {
+            const isAtBottom = logsContainer.scrollHeight - logsContainer.scrollTop <= logsContainer.clientHeight + 50;
+            if (!isAtBottom) {
+                autoScrollCheckbox.checked = false;
+            }
+        });
+
+        connectSSE();
+    </script>
+</body>
+</html>
