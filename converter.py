@@ -228,7 +228,7 @@ class ConversionJob:
             self.preprocessor = ExpressivePreprocessor(
                 narrator_voice=self.job_state.voice,
                 enable_speaker_detection=self.enable_expressive,
-                use_booknlp=True,
+                use_booknlp=False,
                 book_slug=book_slug,
             )
             
