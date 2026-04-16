@@ -235,12 +235,26 @@ class ConversionJob:
             
             self._emit_log("info", f"Preprocessing {len(raw_chapters)} chapters...")
             
-            for raw_chapter in raw_chapters:
+            for i, raw_chapter in enumerate(raw_chapters, 1):
+                chapter_title = raw_chapter.get("title", f"Chapter {i}")
+                self._emit_log("info", f"Preprocessing chapter {i}/{len(raw_chapters)}: {chapter_title}")
+                
+                if self.preprocessor.using_booknlp:
+                    self._emit_log("info", f"  Running BookNLP speaker detection...")
+                
                 processed = self.preprocessor.process_chapter_html(
                     raw_chapter["html_content"],
                     raw_chapter["title"],
                     raw_chapter["order"],
                 )
+                
+                dialogue_count = sum(1 for s in processed.segments if s.segment_type.value == "dialogue")
+                speakers_in_chapter = set(s.speaker for s in processed.segments if s.speaker)
+                
+                self._emit_log("info", f"  Found {len(processed.segments)} segments, {dialogue_count} dialogue lines")
+                if speakers_in_chapter:
+                    self._emit_log("info", f"  Speakers: {', '.join(speakers_in_chapter)}")
+                
                 processed_chapters.append(processed)
                 total_chunks += len(self.preprocessor.chunk_segments(processed.segments))
             
