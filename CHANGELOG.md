@@ -2,6 +2,38 @@
 
 All notable changes to this project will be documented in this file.
 
+## [PR #3] - Dialogue Detection Foundation
+
+Simplified speaker system to focus on dialogue detection without attribution:
+
+#### Changes
+- **Disabled speaker attribution**: Removed spaCy/Ollama/BookNLP speaker detection (accuracy was ~40% - not production ready)
+- **Dialogue detection only**: Maintains accurate dialogue vs narration classification
+- **Added spaCy/Ollama infrastructure**: Code ready for future speaker attribution improvements
+- **Environment-based Ollama config**: `OLLAMA_HOST` and `OLLAMA_MODEL` env vars for external LLM
+
+#### Technical Changes  
+- Added `SpacySpeakerDetector` class (disabled by default)
+- Added `OllamaSpeakerDetector` class (disabled by default)
+- Defaults changed: `enable_speaker_detection=False`, `use_booknlp=False`
+- Added `requests` and `spacy` to requirements.txt
+
+## [PR #2] - Pitch-Based Speaker Differentiation
+
+Replaced multi-voice speaker system with pitch-shift based differentiation for more consistent audio quality:
+
+#### Changes
+- **Single voice, multiple speakers**: All dialogue uses the narrator's voice with pitch variations
+- **Pitch shifts by gender**: Female speakers get higher pitch (+1.5 to +3.0 semitones), male speakers get lower pitch (-1.0 to -2.5 semitones)
+- **Consistent speaker identity**: Same character maintains same pitch shift across chapters
+- **Improved audio consistency**: Eliminates speed variation issues between different TTS voices
+
+#### Technical Changes
+- Replaced `voice_override` with `pitch_shift` in TextSegment
+- Added `pitch_shift_audio()` using scipy signal processing
+- Updated `VoiceMappingStore` to persist pitch shifts instead of voice IDs
+- Added scipy dependency for audio resampling
+
 ## [PR #1] - Expressive Audiobook Preprocessing
 
 Major enhancement to produce more natural, expressive audiobook narration:

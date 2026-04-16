@@ -22,6 +22,7 @@ from preprocessor import (
     TextSegment,
     SegmentType,
     generate_silence_samples,
+    pitch_shift_audio,
 )
 
 
@@ -70,7 +71,6 @@ class ConversionJob:
         log_queue: asyncio.Queue[LogEvent],
         log_store: LogStore,
         enable_expressive: bool = True,
-        enable_multi_voice: bool = True,
     ):
         self.job_state = job_state
         self.job_manager = job_manager
@@ -79,7 +79,6 @@ class ConversionJob:
         self.should_stop = Event()
         self.kokoro: Optional[Kokoro] = None
         self.enable_expressive = enable_expressive
-        self.enable_multi_voice = enable_multi_voice
         self.sample_rate = 24000
 
     def _emit_log(self, level: str, message: str, progress: float = 0.0, chapter: Optional[int] = None, chunk: Optional[int] = None):
@@ -118,17 +117,21 @@ class ConversionJob:
         if self.kokoro is None:
             raise RuntimeError("Kokoro not initialized")
         
-        voice = segment.voice_override if segment.voice_override else default_voice
-        lang = "en-gb" if voice.startswith("b") else "en-us"
+        lang = "en-gb" if default_voice.startswith("b") else "en-us"
         
         samples, sr = self.kokoro.create(
             segment.text,
-            voice=voice,
+            voice=default_voice,
             speed=segment.speed,
             lang=lang,
         )
         self.sample_rate = sr
-        return np.array(samples)
+        audio = np.array(samples)
+        
+        if segment.pitch_shift != 0:
+            audio = pitch_shift_audio(audio, sr, segment.pitch_shift)
+        
+        return audio
 
     def _generate_silence(self, duration_seconds: float) -> np.ndarray:
         return np.array(generate_silence_samples(duration_seconds, self.sample_rate))
@@ -153,7 +156,18 @@ class ConversionJob:
                     wav_file.write(silence)
                 
                 if segment.segment_type == SegmentType.SCENE_BREAK:
+                    self._emit_log("info", "  [SCENE BREAK]")
                     continue
+                
+                preview = segment.text[:60] + "..." if len(segment.text) > 60 else segment.text
+                if segment.segment_type.value == "dialogue" and segment.speaker:
+                    self._emit_log("info", f"  [{segment.speaker} {segment.pitch_shift:+.1f}st]: \"{preview}\"")
+                elif segment.segment_type.value == "dialogue":
+                    self._emit_log("info", f"  [DIALOGUE]: \"{preview}\"")
+                elif segment.segment_type.value == "thought":
+                    self._emit_log("info", f"  [THOUGHT]: {preview}")
+                elif segment.segment_type.value == "chapter_start":
+                    self._emit_log("info", f"  [CHAPTER]: {preview}")
                 
                 try:
                     audio = self._synthesize_segment(segment, default_voice)
@@ -213,41 +227,47 @@ class ConversionJob:
             
             self.preprocessor = ExpressivePreprocessor(
                 narrator_voice=self.job_state.voice,
-                enable_speaker_detection=self.enable_expressive,
-                enable_multi_voice=self.enable_multi_voice,
-                use_booknlp=True,
+                enable_speaker_detection=False,
+                use_booknlp=False,
                 book_slug=book_slug,
             )
             
-            existing_speakers = self.preprocessor.get_speaker_voice_map()
-            if len(existing_speakers) > 1:
-                self._emit_log("info", f"Loaded {len(existing_speakers) - 1} existing speaker voices")
-            
-            if self.preprocessor.using_booknlp:
-                self._emit_log("info", "Using BookNLP for enhanced speaker detection")
-            else:
-                self._emit_log("info", "Using regex-based speaker detection (install booknlp for better accuracy)")
+            self._emit_log("info", "Dialogue detection enabled (speaker attribution disabled)")
             
             processed_chapters: list[ProcessedChapter] = []
             total_chunks = 0
             
             self._emit_log("info", f"Preprocessing {len(raw_chapters)} chapters...")
             
-            for raw_chapter in raw_chapters:
+            for i, raw_chapter in enumerate(raw_chapters, 1):
+                chapter_title = raw_chapter.get("title", f"Chapter {i}")
+                self._emit_log("info", f"Preprocessing chapter {i}/{len(raw_chapters)}: {chapter_title}")
+                
+                if self.preprocessor.using_booknlp:
+                    self._emit_log("info", f"  Running BookNLP speaker detection...")
+                
                 processed = self.preprocessor.process_chapter_html(
                     raw_chapter["html_content"],
                     raw_chapter["title"],
                     raw_chapter["order"],
                 )
+                
+                dialogue_count = sum(1 for s in processed.segments if s.segment_type.value == "dialogue")
+                speakers_in_chapter = set(s.speaker for s in processed.segments if s.speaker)
+                
+                self._emit_log("info", f"  Found {len(processed.segments)} segments, {dialogue_count} dialogue lines")
+                if speakers_in_chapter:
+                    self._emit_log("info", f"  Speakers: {', '.join(speakers_in_chapter)}")
+                
                 processed_chapters.append(processed)
                 total_chunks += len(self.preprocessor.chunk_segments(processed.segments))
             
             self.total_chapters = len(processed_chapters)
             self.job_manager.update_checkpoint(job_id, 0, 0, self.total_chapters, total_chunks)
             
-            speaker_map = self.preprocessor.get_speaker_voice_map()
+            speaker_map = self.preprocessor.get_speaker_pitch_map()
             if len(speaker_map) > 1:
-                speaker_list = ", ".join(f"{s}: {v}" for s, v in speaker_map.items() if s != "NARRATOR")
+                speaker_list = ", ".join(f"{s}: {p:+.1f}st" for s, p in speaker_map.items() if s != "NARRATOR")
                 self._emit_log("info", f"Detected speakers: {speaker_list}")
             
             self._emit_log("info", f"Found {self.total_chapters} chapters, {total_chunks} chunks")
@@ -295,9 +315,9 @@ class ConversionJob:
                 self._emit_log("info", f"Saved {chapter_mp3_path.name}")
             
             self.preprocessor.save_voice_mappings()
-            speaker_map = self.preprocessor.get_speaker_voice_map()
+            speaker_map = self.preprocessor.get_speaker_pitch_map()
             if len(speaker_map) > 1:
-                self._emit_log("info", f"Saved voice mappings for {len(speaker_map) - 1} speakers")
+                self._emit_log("info", f"Saved pitch mappings for {len(speaker_map) - 1} speakers")
             
             self.job_manager.update_job(job_id, status=JobStatus.COMPLETED, progress=100.0)
             self._emit_log("info", "Conversion completed!", progress=100.0)
