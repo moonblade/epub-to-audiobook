@@ -2,6 +2,37 @@
 
 All notable changes to this project will be documented in this file.
 
+## [PR #4] - 2026-04-16 - Ollama Few-Shot Speaker Detection (93% Accuracy)
+
+Improved Ollama speaker detection from ~40% to 93% accuracy using few-shot prompting:
+
+#### Changes
+- **Few-shot prompting**: Replaced instruction-based prompts with pattern-based few-shot examples
+- **93% accuracy**: Manually verified against 43 test cases from 6 different EPUBs
+- **Model upgrade**: Default model changed from `qwen2.5:0.5b` to `qwen2.5:1.5b` (986 MB)
+- **Test suite**: Added comprehensive test suite with manually-crafted ground truth
+
+#### Prompt Strategy
+```
+Who speaks? Return only the name.
+
+"Hello" John said. → John
+"Why?" Mary asked. → Mary
+
+"<dialogue>" <context> →
+```
+
+#### Known Limitations (3 failure modes)
+1. Pronoun resolution: "he said" requires broader context
+2. Confusing phrasing: "Will directed Ria" can confuse extraction
+3. No speaker in context: Dialogue without explicit attribution
+
+#### Technical Changes
+- Simplified `OllamaSpeakerDetector._build_prompt_*()` methods
+- Increased timeout from 10s to 15s
+- Added `test_ollama_extensive.py` with 43 manual test cases
+- Parameters: `temperature: 0.0`, `num_predict: 10`
+
 ## [PR #3] - Dialogue Detection Foundation
 
 Simplified speaker system to focus on dialogue detection without attribution:
