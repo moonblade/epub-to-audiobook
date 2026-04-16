@@ -22,6 +22,7 @@ from preprocessor import (
     TextSegment,
     SegmentType,
     generate_silence_samples,
+    pitch_shift_audio,
 )
 
 
@@ -70,7 +71,6 @@ class ConversionJob:
         log_queue: asyncio.Queue[LogEvent],
         log_store: LogStore,
         enable_expressive: bool = True,
-        enable_multi_voice: bool = True,
     ):
         self.job_state = job_state
         self.job_manager = job_manager
@@ -79,7 +79,6 @@ class ConversionJob:
         self.should_stop = Event()
         self.kokoro: Optional[Kokoro] = None
         self.enable_expressive = enable_expressive
-        self.enable_multi_voice = enable_multi_voice
         self.sample_rate = 24000
 
     def _emit_log(self, level: str, message: str, progress: float = 0.0, chapter: Optional[int] = None, chunk: Optional[int] = None):
@@ -118,17 +117,21 @@ class ConversionJob:
         if self.kokoro is None:
             raise RuntimeError("Kokoro not initialized")
         
-        voice = segment.voice_override if segment.voice_override else default_voice
-        lang = "en-gb" if voice.startswith("b") else "en-us"
+        lang = "en-gb" if default_voice.startswith("b") else "en-us"
         
         samples, sr = self.kokoro.create(
             segment.text,
-            voice=voice,
+            voice=default_voice,
             speed=segment.speed,
             lang=lang,
         )
         self.sample_rate = sr
-        return np.array(samples)
+        audio = np.array(samples)
+        
+        if segment.pitch_shift != 0:
+            audio = pitch_shift_audio(audio, sr, segment.pitch_shift)
+        
+        return audio
 
     def _generate_silence(self, duration_seconds: float) -> np.ndarray:
         return np.array(generate_silence_samples(duration_seconds, self.sample_rate))
@@ -214,14 +217,13 @@ class ConversionJob:
             self.preprocessor = ExpressivePreprocessor(
                 narrator_voice=self.job_state.voice,
                 enable_speaker_detection=self.enable_expressive,
-                enable_multi_voice=self.enable_multi_voice,
                 use_booknlp=True,
                 book_slug=book_slug,
             )
             
-            existing_speakers = self.preprocessor.get_speaker_voice_map()
+            existing_speakers = self.preprocessor.get_speaker_pitch_map()
             if len(existing_speakers) > 1:
-                self._emit_log("info", f"Loaded {len(existing_speakers) - 1} existing speaker voices")
+                self._emit_log("info", f"Loaded {len(existing_speakers) - 1} existing speaker pitch mappings")
             
             if self.preprocessor.using_booknlp:
                 self._emit_log("info", "Using BookNLP for enhanced speaker detection")
@@ -245,9 +247,9 @@ class ConversionJob:
             self.total_chapters = len(processed_chapters)
             self.job_manager.update_checkpoint(job_id, 0, 0, self.total_chapters, total_chunks)
             
-            speaker_map = self.preprocessor.get_speaker_voice_map()
+            speaker_map = self.preprocessor.get_speaker_pitch_map()
             if len(speaker_map) > 1:
-                speaker_list = ", ".join(f"{s}: {v}" for s, v in speaker_map.items() if s != "NARRATOR")
+                speaker_list = ", ".join(f"{s}: {p:+.1f}st" for s, p in speaker_map.items() if s != "NARRATOR")
                 self._emit_log("info", f"Detected speakers: {speaker_list}")
             
             self._emit_log("info", f"Found {self.total_chapters} chapters, {total_chunks} chunks")
@@ -295,9 +297,9 @@ class ConversionJob:
                 self._emit_log("info", f"Saved {chapter_mp3_path.name}")
             
             self.preprocessor.save_voice_mappings()
-            speaker_map = self.preprocessor.get_speaker_voice_map()
+            speaker_map = self.preprocessor.get_speaker_pitch_map()
             if len(speaker_map) > 1:
-                self._emit_log("info", f"Saved voice mappings for {len(speaker_map) - 1} speakers")
+                self._emit_log("info", f"Saved pitch mappings for {len(speaker_map) - 1} speakers")
             
             self.job_manager.update_job(job_id, status=JobStatus.COMPLETED, progress=100.0)
             self._emit_log("info", "Conversion completed!", progress=100.0)

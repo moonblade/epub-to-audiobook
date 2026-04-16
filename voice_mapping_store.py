@@ -1,11 +1,4 @@
 #!/usr/bin/env python3.12
-"""
-Persistent voice mapping storage for consistent character voices across chapters.
-
-Stores speaker-to-voice assignments per book, so when converting multiple chapters
-of the same book, characters maintain their assigned voices.
-"""
-
 import json
 import re
 from pathlib import Path
@@ -15,14 +8,6 @@ from config import VOICE_MAPPINGS_PATH
 
 
 def extract_book_title(filename: str) -> str:
-    """
-    Extract book title from filename pattern: "date - book title - chapter title"
-    
-    Examples:
-        "2026-04-15 - The Legend of William Oh - Chapter 262.epub" -> "the-legend-of-william-oh"
-        "The Primal Hunter - Book 1 - Chapter 5.epub" -> "the-primal-hunter"
-        "wanderingInn2.epub" -> "wanderinginn2"
-    """
     name = Path(filename).stem
     
     date_pattern = r'^\d{4}-\d{2}-\d{2}\s*-\s*'
@@ -55,66 +40,46 @@ class VoiceMappingStore:
         return self.storage_path / f"{book_slug}.json"
     
     def load(self, book_slug: str) -> dict[str, Any]:
-        """
-        Load voice mappings for a book.
-        
-        Returns dict with:
-            - "speakers": {speaker_name: voice_id}
-            - "genders": {speaker_name: gender}
-            - "narrator_voice": voice_id
-        """
         mapping_file = self._get_mapping_file(book_slug)
         
         if mapping_file.exists():
             try:
                 data = json.loads(mapping_file.read_text())
                 return {
-                    "speakers": data.get("speakers", {}),
+                    "pitch_shifts": data.get("pitch_shifts", {}),
                     "genders": data.get("genders", {}),
-                    "narrator_voice": data.get("narrator_voice", "am_adam"),
-                    "used_voices": set(data.get("used_voices", [])),
                 }
             except (json.JSONDecodeError, KeyError):
                 pass
         
         return {
-            "speakers": {},
+            "pitch_shifts": {},
             "genders": {},
-            "narrator_voice": "am_adam",
-            "used_voices": set(),
         }
     
-    def save(self, book_slug: str, speakers: dict[str, str], genders: dict[str, str], 
-             narrator_voice: str, used_voices: set[str]) -> None:
-        """Save voice mappings for a book."""
+    def save(self, book_slug: str, pitch_shifts: dict[str, float], genders: dict[str, str]) -> None:
         mapping_file = self._get_mapping_file(book_slug)
         
         data = {
-            "speakers": speakers,
+            "pitch_shifts": pitch_shifts,
             "genders": genders,
-            "narrator_voice": narrator_voice,
-            "used_voices": list(used_voices),
         }
         
         mapping_file.write_text(json.dumps(data, indent=2))
     
     def get_book_slug(self, filename: str) -> str:
-        """Extract book slug from filename."""
         return extract_book_title(filename)
     
     def list_books(self) -> list[str]:
-        """List all books with saved voice mappings."""
         return [f.stem for f in self.storage_path.glob("*.json")]
     
     def get_mapping_summary(self, book_slug: str) -> Optional[dict[str, Any]]:
-        """Get a summary of voice mappings for display."""
         mapping = self.load(book_slug)
-        if not mapping["speakers"]:
+        if not mapping["pitch_shifts"]:
             return None
         
         return {
             "book": book_slug,
-            "narrator": mapping["narrator_voice"],
-            "characters": len(mapping["speakers"]) - 1,
-            "speakers": mapping["speakers"],
+            "characters": len(mapping["pitch_shifts"]) - 1,
+            "pitch_shifts": mapping["pitch_shifts"],
         }

@@ -1,17 +1,12 @@
 #!/usr/bin/env python3.12
-"""
-Expressive preprocessing for EPUB to audiobook conversion.
-
-Handles scene breaks, dialogue/thought detection, speaker attribution,
-and prosody control based on ACX/Audible production standards.
-"""
-
 import re
 import tempfile
 from dataclasses import dataclass, field
 from enum import Enum
 from pathlib import Path
 from typing import Optional
+
+import numpy as np
 from bs4 import BeautifulSoup, Tag
 
 
@@ -31,7 +26,7 @@ class TextSegment:
     pause_before_seconds: float = 0.0
     pause_after_seconds: float = 0.0
     speed: float = 1.0
-    voice_override: Optional[str] = None
+    pitch_shift: float = 0.0  # Semitones: positive=higher, negative=lower
 
 
 @dataclass
@@ -137,34 +132,27 @@ PRONOUNS = frozenset([
 ])
 
 
+PITCH_SHIFTS_FEMALE = [1.5, 2.5, 1.0, 3.0, 2.0]
+PITCH_SHIFTS_MALE = [-1.0, -2.0, -1.5, -0.5, -2.5]
+
+
 class SpeakerTracker:
-    def __init__(self, narrator_voice: str = "am_adam", accent: str = "us",
-                 initial_speakers: Optional[dict[str, str]] = None,
-                 initial_genders: Optional[dict[str, str]] = None,
-                 initial_used_voices: Optional[set[str]] = None):
-        self.narrator_voice = narrator_voice
-        self.accent = accent
-        self.speaker_voices: dict[str, str] = {"NARRATOR": narrator_voice}
+    def __init__(
+        self,
+        initial_pitch_shifts: Optional[dict[str, float]] = None,
+        initial_genders: Optional[dict[str, str]] = None,
+    ):
+        self.speaker_pitch_shifts: dict[str, float] = {"NARRATOR": 0.0}
         self.speaker_genders: dict[str, str] = {}
-        self._voice_pools = self._build_voice_pools()
-        self._assigned_voices: set[str] = {narrator_voice}
+        self._female_index = 0
+        self._male_index = 0
         
-        if initial_speakers:
-            self.speaker_voices.update(initial_speakers)
+        if initial_pitch_shifts:
+            self.speaker_pitch_shifts.update(initial_pitch_shifts)
+            self._female_index = sum(1 for p in initial_pitch_shifts.values() if p > 0)
+            self._male_index = sum(1 for p in initial_pitch_shifts.values() if p < 0)
         if initial_genders:
             self.speaker_genders.update(initial_genders)
-        if initial_used_voices:
-            self._assigned_voices.update(initial_used_voices)
-
-    def _build_voice_pools(self) -> dict[str, list[str]]:
-        pools: dict[str, list[str]] = {
-            "female_us": [], "female_uk": [],
-            "male_us": [], "male_uk": [],
-        }
-        for voice_id, profile in VOICE_PROFILES.items():
-            key = f"{profile['gender']}_{profile['accent']}"
-            pools[key].append(voice_id)
-        return pools
 
     def _normalize_name(self, speaker: str) -> str:
         normalized = speaker.strip().title()
@@ -186,40 +174,33 @@ class SpeakerTracker:
         
         return "unknown"
 
-    def get_voice(self, speaker: Optional[str]) -> str:
+    def get_pitch_shift(self, speaker: Optional[str]) -> float:
         if speaker is None or speaker.upper() == "NARRATOR":
-            return self.narrator_voice
+            return 0.0
 
         normalized = self._normalize_name(speaker)
 
-        if normalized in self.speaker_voices:
-            return self.speaker_voices[normalized]
+        if normalized in self.speaker_pitch_shifts:
+            return self.speaker_pitch_shifts[normalized]
 
         gender = self._infer_gender(normalized)
         self.speaker_genders[normalized] = gender
 
         if gender == "unknown":
-            gender = "female" if len(self.speaker_voices) % 2 == 0 else "male"
+            gender = "female" if len(self.speaker_pitch_shifts) % 2 == 0 else "male"
 
-        pool_key = f"{gender}_{self.accent}"
-        pool = self._voice_pools.get(pool_key, [])
+        if gender == "female":
+            pitch = PITCH_SHIFTS_FEMALE[self._female_index % len(PITCH_SHIFTS_FEMALE)]
+            self._female_index += 1
+        else:
+            pitch = PITCH_SHIFTS_MALE[self._male_index % len(PITCH_SHIFTS_MALE)]
+            self._male_index += 1
 
-        for voice in pool:
-            if voice not in self._assigned_voices:
-                self.speaker_voices[normalized] = voice
-                self._assigned_voices.add(voice)
-                return voice
+        self.speaker_pitch_shifts[normalized] = pitch
+        return pitch
 
-        voice = pool[len(self.speaker_voices) % len(pool)] if pool else self.narrator_voice
-        self.speaker_voices[normalized] = voice
-        return voice
-
-    def register_speaker_gender(self, speaker: str, gender: str) -> None:
-        normalized = self._normalize_name(speaker)
-        self.speaker_genders[normalized] = gender
-
-    def get_all_speakers(self) -> dict[str, str]:
-        return dict(self.speaker_voices)
+    def get_all_speakers(self) -> dict[str, float]:
+        return dict(self.speaker_pitch_shifts)
 
 
 class BookNLPSpeakerDetector:
@@ -318,37 +299,28 @@ class ExpressivePreprocessor:
         self,
         narrator_voice: str = "am_adam",
         enable_speaker_detection: bool = True,
-        enable_multi_voice: bool = True,
         use_booknlp: bool = True,
         book_slug: Optional[str] = None,
     ):
         self.narrator_voice = narrator_voice
         self.enable_speaker_detection = enable_speaker_detection
-        self.enable_multi_voice = enable_multi_voice
         self.book_slug = book_slug
 
-        accent = "uk" if narrator_voice.startswith("b") else "us"
-        
-        initial_speakers = None
+        initial_pitch_shifts = None
         initial_genders = None
-        initial_used_voices = None
         
         if book_slug:
             from voice_mapping_store import VoiceMappingStore
             self._voice_store = VoiceMappingStore()
             saved = self._voice_store.load(book_slug)
-            if saved["speakers"]:
-                initial_speakers = saved["speakers"]
+            if saved["pitch_shifts"]:
+                initial_pitch_shifts = saved["pitch_shifts"]
                 initial_genders = saved["genders"]
-                initial_used_voices = saved["used_voices"]
-                if saved["narrator_voice"]:
-                    self.narrator_voice = saved["narrator_voice"]
         else:
             self._voice_store = None
         
         self.speaker_tracker = SpeakerTracker(
-            self.narrator_voice, accent,
-            initial_speakers, initial_genders, initial_used_voices
+            initial_pitch_shifts, initial_genders
         )
 
         self._scene_break_pattern = re.compile("|".join(SCENE_BREAK_PATTERNS), re.MULTILINE)
@@ -364,10 +336,8 @@ class ExpressivePreprocessor:
         if self._voice_store and self.book_slug:
             self._voice_store.save(
                 self.book_slug,
-                self.speaker_tracker.speaker_voices,
+                self.speaker_tracker.speaker_pitch_shifts,
                 self.speaker_tracker.speaker_genders,
-                self.narrator_voice,
-                self.speaker_tracker._assigned_voices,
             )
 
     def _compile_speaker_pattern(self) -> re.Pattern:
@@ -411,7 +381,7 @@ class ExpressivePreprocessor:
             speed=SPEED_BY_SEGMENT_TYPE[SegmentType.THOUGHT],
         )
 
-    def _create_dialogue_segment(self, text: str, speaker: Optional[str], voice: Optional[str]) -> TextSegment:
+    def _create_dialogue_segment(self, text: str, speaker: Optional[str], pitch_shift: float) -> TextSegment:
         return TextSegment(
             text=text,
             segment_type=SegmentType.DIALOGUE,
@@ -419,7 +389,7 @@ class ExpressivePreprocessor:
             pause_before_seconds=PAUSE_SECONDS["dialogue_start"],
             pause_after_seconds=PAUSE_SECONDS["dialogue_end"],
             speed=SPEED_BY_SEGMENT_TYPE[SegmentType.DIALOGUE],
-            voice_override=voice,
+            pitch_shift=pitch_shift,
         )
 
     def _split_by_thoughts(self, text: str, thought_texts: set[str]) -> list[TextSegment]:
@@ -478,11 +448,11 @@ class ExpressivePreprocessor:
                 context_window = full_text[max(0, start - 100):min(len(full_text), end + 100)]
                 speaker = self._extract_speaker_regex(context_window)
 
-            voice = None
-            if self.enable_multi_voice and speaker:
-                voice = self.speaker_tracker.get_voice(speaker)
+            pitch_shift = 0.0
+            if self.enable_speaker_detection and speaker:
+                pitch_shift = self.speaker_tracker.get_pitch_shift(speaker)
 
-            segments.append(self._create_dialogue_segment(dialogue_text, speaker, voice))
+            segments.append(self._create_dialogue_segment(dialogue_text, speaker, pitch_shift))
             last_end = end
 
         if last_end < len(full_text):
@@ -566,7 +536,7 @@ class ExpressivePreprocessor:
                                 segment_type=segment.segment_type,
                                 speaker=segment.speaker,
                                 speed=segment.speed,
-                                voice_override=segment.voice_override,
+                                pitch_shift=segment.pitch_shift,
                             )])
                     else:
                         if current_size + len(sentence) > max_chars and current_chunk:
@@ -578,7 +548,7 @@ class ExpressivePreprocessor:
                             segment_type=segment.segment_type,
                             speaker=segment.speaker,
                             speed=segment.speed,
-                            voice_override=segment.voice_override,
+                            pitch_shift=segment.pitch_shift,
                         ))
                         current_size += len(sentence)
             else:
@@ -613,7 +583,7 @@ class ExpressivePreprocessor:
 
         return pieces
 
-    def get_speaker_voice_map(self) -> dict[str, str]:
+    def get_speaker_pitch_map(self) -> dict[str, float]:
         return self.speaker_tracker.get_all_speakers()
     
     @property
@@ -623,3 +593,18 @@ class ExpressivePreprocessor:
 
 def generate_silence_samples(duration_seconds: float, sample_rate: int = 24000) -> list[float]:
     return [0.0] * int(duration_seconds * sample_rate)
+
+
+def pitch_shift_audio(audio: np.ndarray, sample_rate: int, semitones: float) -> np.ndarray:
+    if semitones == 0 or len(audio) == 0:
+        return audio
+    
+    from scipy import signal
+    
+    ratio = 2 ** (semitones / 12)
+    new_length = int(len(audio) / ratio)
+    if new_length == 0:
+        return audio
+    
+    shifted = signal.resample(audio, new_length)
+    return np.asarray(signal.resample(shifted, len(audio)))
