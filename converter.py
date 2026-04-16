@@ -156,7 +156,18 @@ class ConversionJob:
                     wav_file.write(silence)
                 
                 if segment.segment_type == SegmentType.SCENE_BREAK:
+                    self._emit_log("info", "  [SCENE BREAK]")
                     continue
+                
+                preview = segment.text[:60] + "..." if len(segment.text) > 60 else segment.text
+                if segment.segment_type.value == "dialogue" and segment.speaker:
+                    self._emit_log("info", f"  [{segment.speaker} {segment.pitch_shift:+.1f}st]: \"{preview}\"")
+                elif segment.segment_type.value == "dialogue":
+                    self._emit_log("info", f"  [DIALOGUE]: \"{preview}\"")
+                elif segment.segment_type.value == "thought":
+                    self._emit_log("info", f"  [THOUGHT]: {preview}")
+                elif segment.segment_type.value == "chapter_start":
+                    self._emit_log("info", f"  [CHAPTER]: {preview}")
                 
                 try:
                     audio = self._synthesize_segment(segment, default_voice)
