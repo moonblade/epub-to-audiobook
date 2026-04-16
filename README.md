@@ -101,11 +101,36 @@ curl -L -o models/voices-v1.0.bin \
 uvicorn main:app --host 0.0.0.0 --port 3002
 ```
 
-### Option 3: Docker (Coming Soon)
+### Option 3: Docker
 
 ```bash
-docker run -p 3002:3002 -v ./books:/app/input -v ./audio:/app/output moonblade/epub-to-audiobook
+docker run -d \
+  --name epubtoaudio \
+  -p 3002:3002 \
+  -v ./input:/data/input \
+  -v ./output:/data/output \
+  ghcr.io/moonblade/epubtoaudio:latest
 ```
+
+Or with docker-compose:
+
+```yaml
+services:
+  epubtoaudio:
+    image: ghcr.io/moonblade/epubtoaudio:latest
+    ports:
+      - "3002:3002"
+    volumes:
+      - ./input:/data/input
+      - ./output:/data/output
+    restart: unless-stopped
+```
+
+The Docker image includes:
+- Python 3.12 with all dependencies
+- TTS models pre-downloaded (~500MB)
+- spaCy English model
+- ffmpeg for audio processing
 
 ---
 
