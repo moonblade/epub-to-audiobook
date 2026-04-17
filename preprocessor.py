@@ -698,6 +698,78 @@ class ExpressivePreprocessor:
             pitch_shift=pitch_shift,
         )
 
+    @staticmethod
+    def _normalize_text(text: str) -> str:
+        text = re.sub(r'\$(\d[\d,]*\.?\d*)', lambda m: m.group(1).replace(',', '') + ' dollars', text)
+        text = re.sub(r'(\d[\d,]*\.?\d*)%', lambda m: m.group(1).replace(',', '') + ' percent', text)
+        text = re.sub(r'#(\d+)', r'number \1', text)
+
+        abbreviations = {
+            r'\bDr\.': 'Doctor', r'\bMr\.': 'Mister', r'\bMrs\.': 'Missus',
+            r'\bMs\.': 'Miss', r'\bSt\.': 'Saint', r'\bSgt\.': 'Sergeant',
+            r'\bCpt\.': 'Captain', r'\bLt\.': 'Lieutenant', r'\bGen\.': 'General',
+            r'\bProf\.': 'Professor', r'\bvs\.': 'versus', r'\betc\.': 'etcetera',
+            r'\be\.g\.': 'for example', r'\bi\.e\.': 'that is',
+        }
+        for pattern, replacement in abbreviations.items():
+            text = re.sub(pattern, replacement, text)
+
+        def _ordinal(m: re.Match[str]) -> str:
+            n = int(m.group(1))
+            if 11 <= n % 100 <= 13:
+                suffix = 'th'
+            else:
+                suffix = {1: 'st', 2: 'nd', 3: 'rd'}.get(n % 10, 'th')
+            return f'{n}{suffix}'
+
+        text = re.sub(r'(\d+)(?:st|nd|rd|th)\b', _ordinal, text)
+
+        def _number_to_words(m: re.Match[str]) -> str:
+            num_str = m.group(0).replace(',', '')
+            try:
+                num = float(num_str) if '.' in num_str else int(num_str)
+            except ValueError:
+                return m.group(0)
+            if isinstance(num, int) and abs(num) > 9999:
+                return m.group(0)
+            if isinstance(num, float):
+                integer_part = int(num)
+                decimal_str = num_str.split('.')[1]
+                return f'{integer_part} point {" ".join(decimal_str)}'
+            ones = ['', 'one', 'two', 'three', 'four', 'five', 'six', 'seven', 'eight', 'nine',
+                    'ten', 'eleven', 'twelve', 'thirteen', 'fourteen', 'fifteen', 'sixteen',
+                    'seventeen', 'eighteen', 'nineteen']
+            tens = ['', '', 'twenty', 'thirty', 'forty', 'fifty', 'sixty', 'seventy', 'eighty', 'ninety']
+            if num == 0:
+                return 'zero'
+            if num < 0:
+                abs_match = re.match(r'\d+', str(abs(num)))
+                return 'minus ' + (_number_to_words(abs_match) if abs_match else str(abs(num)))
+            parts = []
+            if num >= 1000:
+                parts.append(ones[num // 1000] + ' thousand')
+                num %= 1000
+            if num >= 100:
+                parts.append(ones[num // 100] + ' hundred')
+                num %= 100
+                if num > 0:
+                    parts.append('and')
+            if num >= 20:
+                word = tens[num // 10]
+                if num % 10:
+                    word += '-' + ones[num % 10]
+                parts.append(word)
+            elif num > 0:
+                parts.append(ones[num])
+            return ' '.join(parts)
+
+        text = re.sub(r'\b\d{1,4}(?:,\d{3})*(?:\.\d+)?\b', _number_to_words, text)
+
+        text = re.sub(r'\s*[&]\s*', ' and ', text)
+        text = re.sub(r'\s*/\s*', ' or ', text)
+
+        return text
+
     def _split_punctuation(self, segments: list[TextSegment]) -> list[TextSegment]:
         result: list[TextSegment] = []
         split_pattern = re.compile(r'(?<=[!?])(?:\s+)(?=[A-Z])')
@@ -808,7 +880,7 @@ class ExpressivePreprocessor:
         return segments
 
     def _parse_paragraph(self, element: Tag, booknlp_attributions: Optional[dict] = None) -> list[TextSegment]:
-        full_text = element.get_text()
+        full_text = self._normalize_text(element.get_text())
 
         if self._is_scene_break(full_text):
             return [TextSegment(
