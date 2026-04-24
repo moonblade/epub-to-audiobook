@@ -777,6 +777,27 @@ class ExpressivePreprocessor:
         text = re.sub(r'(\d[\d,]*\.?\d*)%', lambda m: m.group(1).replace(',', '') + ' percent', text)
         text = re.sub(r'#(\d+)', r'number \1', text)
 
+        roman_numerals = {
+            'I': 1, 'II': 2, 'III': 3, 'IV': 4, 'V': 5,
+            'VI': 6, 'VII': 7, 'VIII': 8, 'IX': 9, 'X': 10,
+            'XI': 11, 'XII': 12, 'XIII': 13, 'XIV': 14, 'XV': 15,
+            'XVI': 16, 'XVII': 17, 'XVIII': 18, 'XIX': 19, 'XX': 20,
+        }
+
+        def _roman_to_arabic(m: re.Match[str]) -> str:
+            prefix = m.group(1)
+            roman = m.group(2).upper()
+            if roman in roman_numerals:
+                return f'{prefix}{roman_numerals[roman]}'
+            return m.group(0)
+
+        text = re.sub(
+            r'\b(tier|level|grade|class|rank|phase|stage|part|book|chapter|volume|act|scene|type|mark|version|v|form)\s+([IiVvXx]+)\b',
+            _roman_to_arabic,
+            text,
+            flags=re.IGNORECASE
+        )
+
         abbreviations = {
             r'\bDr\.': 'Doctor', r'\bMr\.': 'Mister', r'\bMrs\.': 'Missus',
             r'\bMs\.': 'Miss', r'\bSt\.': 'Saint', r'\bSgt\.': 'Sergeant',
