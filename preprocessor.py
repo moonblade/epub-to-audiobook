@@ -1092,6 +1092,9 @@ class ExpressivePreprocessor:
         previous_was_scene_break = False
 
         for element in block_elements:
+            if element.find_all(["p", "div", "blockquote"], recursive=False):
+                continue
+
             text = element.get_text().strip()
             if not text or (len(text) < 10 and element.name in ("div", "p")):
                 continue
