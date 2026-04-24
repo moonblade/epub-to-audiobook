@@ -123,8 +123,8 @@ PAUSE_SECONDS = {
     "attribution_end": 0.1,
     "exclamation": 0.15,
     "question": 0.12,
-    "ellipsis": 0.3,
-    "em_dash": 0.1,
+    "ellipsis": 0.6,
+    "em_dash": 0.15,
 }
 
 SPEED_BY_SEGMENT_TYPE = {
@@ -854,6 +854,7 @@ class ExpressivePreprocessor:
     def _split_punctuation(self, segments: list[TextSegment]) -> list[TextSegment]:
         result: list[TextSegment] = []
         split_pattern = re.compile(r'(?<=[!?])(?:\s+)(?=[A-Z])')
+        ellipsis_pattern = re.compile(r'(\.\.\.|\u2026)')
         min_words = 4
         
         for seg in segments:
@@ -869,10 +870,33 @@ class ExpressivePreprocessor:
                 result.append(seg)
                 continue
             
-            if '...' in text or '\u2026' in text:
-                seg.pause_after_seconds = max(seg.pause_after_seconds, PAUSE_SECONDS["ellipsis"])
             if '\u2014' in text:
                 seg.pause_after_seconds = max(seg.pause_after_seconds, PAUSE_SECONDS["em_dash"])
+            
+            if ellipsis_pattern.search(text):
+                ellipsis_parts = ellipsis_pattern.split(text)
+                ellipsis_segments: list[TextSegment] = []
+                for i, part in enumerate(ellipsis_parts):
+                    part = part.strip()
+                    if not part:
+                        continue
+                    if part in ('...', '\u2026'):
+                        if ellipsis_segments:
+                            ellipsis_segments[-1].pause_after_seconds = PAUSE_SECONDS["ellipsis"]
+                    else:
+                        is_last = i == len(ellipsis_parts) - 1
+                        ellipsis_segments.append(TextSegment(
+                            text=part,
+                            segment_type=seg.segment_type,
+                            speaker=seg.speaker,
+                            pause_before_seconds=seg.pause_before_seconds if not ellipsis_segments else 0.0,
+                            pause_after_seconds=seg.pause_after_seconds if is_last else 0.0,
+                            speed=seg.speed,
+                            pitch_shift=seg.pitch_shift,
+                        ))
+                if ellipsis_segments:
+                    result.extend(ellipsis_segments)
+                    continue
             
             parts = [p.strip() for p in split_pattern.split(text) if p.strip()]
             if len(parts) <= 1:
