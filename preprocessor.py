@@ -788,7 +788,7 @@ class ExpressivePreprocessor:
             prefix = m.group(1)
             roman = m.group(2).upper()
             if roman in roman_numerals:
-                return f'{prefix}{roman_numerals[roman]}'
+                return f'{prefix} {roman_numerals[roman]}'
             return m.group(0)
 
         text = re.sub(
