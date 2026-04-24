@@ -37,6 +37,79 @@ class ProcessedChapter:
     order: int
     segments: list[TextSegment] = field(default_factory=list)
 
+    def to_dict(self) -> dict:
+        return {
+            "title": self.title,
+            "order": self.order,
+            "segments": [
+                {
+                    "text": seg.text,
+                    "segment_type": seg.segment_type.value,
+                    "speaker": seg.speaker,
+                    "pause_before_seconds": seg.pause_before_seconds,
+                    "pause_after_seconds": seg.pause_after_seconds,
+                    "speed": seg.speed,
+                    "pitch_shift": seg.pitch_shift,
+                }
+                for seg in self.segments
+            ],
+        }
+
+    @classmethod
+    def from_dict(cls, data: dict) -> "ProcessedChapter":
+        segments = [
+            TextSegment(
+                text=seg["text"],
+                segment_type=SegmentType(seg["segment_type"]),
+                speaker=seg.get("speaker"),
+                pause_before_seconds=seg.get("pause_before_seconds", 0.0),
+                pause_after_seconds=seg.get("pause_after_seconds", 0.0),
+                speed=seg.get("speed", 1.0),
+                pitch_shift=seg.get("pitch_shift", 0.0),
+            )
+            for seg in data["segments"]
+        ]
+        return cls(title=data["title"], order=data["order"], segments=segments)
+
+
+@dataclass
+class ProcessedBook:
+    epub_filename: str
+    voice: str
+    chapters: list[ProcessedChapter] = field(default_factory=list)
+    speaker_pitch_map: dict[str, float] = field(default_factory=dict)
+    speaker_genders: dict[str, str] = field(default_factory=dict)
+
+    def to_dict(self) -> dict:
+        return {
+            "version": 1,
+            "epub_filename": self.epub_filename,
+            "voice": self.voice,
+            "speaker_pitch_map": self.speaker_pitch_map,
+            "speaker_genders": self.speaker_genders,
+            "chapters": [ch.to_dict() for ch in self.chapters],
+        }
+
+    @classmethod
+    def from_dict(cls, data: dict) -> "ProcessedBook":
+        chapters = [ProcessedChapter.from_dict(ch) for ch in data["chapters"]]
+        return cls(
+            epub_filename=data["epub_filename"],
+            voice=data["voice"],
+            chapters=chapters,
+            speaker_pitch_map=data.get("speaker_pitch_map", {}),
+            speaker_genders=data.get("speaker_genders", {}),
+        )
+
+    def save(self, path: Path) -> None:
+        import json
+        path.write_text(json.dumps(self.to_dict(), indent=2))
+
+    @classmethod
+    def load(cls, path: Path) -> "ProcessedBook":
+        import json
+        return cls.from_dict(json.loads(path.read_text()))
+
 
 PAUSE_SECONDS = {
     "sentence": 0.3,
@@ -668,7 +741,7 @@ class ExpressivePreprocessor:
         return None
 
     def _extract_italicized_text(self, element: Tag) -> set[str]:
-        return {tag.get_text().strip() for tag in element.find_all(["i", "em"])}
+        return {t for tag in element.find_all(["i", "em"]) if (t := tag.get_text().strip())}
 
     def _create_narration_segment(self, text: str, pause_after: float = 0.0) -> TextSegment:
         return TextSegment(
@@ -768,11 +841,20 @@ class ExpressivePreprocessor:
         text = re.sub(r'\s*[&]\s*', ' and ', text)
         text = re.sub(r'\s*/\s*', ' or ', text)
 
+        text = re.sub(r'\b([A-Za-z])\.\.+([A-Za-z])', r'\1-\2', text)
+
+        text = re.sub(r'\bah\b(?![a-z])', 'ahh', text, flags=re.IGNORECASE)
+        text = re.sub(r'\boh\b(?![a-z])', 'ohh', text, flags=re.IGNORECASE)
+        text = re.sub(r'\buh\b(?![a-z])', 'uhh', text, flags=re.IGNORECASE)
+        text = re.sub(r'\bhm\b', 'hmm', text, flags=re.IGNORECASE)
+        text = re.sub(r'\bhuh\b', 'huhh', text, flags=re.IGNORECASE)
+
         return text
 
     def _split_punctuation(self, segments: list[TextSegment]) -> list[TextSegment]:
         result: list[TextSegment] = []
         split_pattern = re.compile(r'(?<=[!?])(?:\s+)(?=[A-Z])')
+        min_words = 4
         
         for seg in segments:
             if seg.segment_type not in (SegmentType.DIALOGUE, SegmentType.NARRATION):
@@ -792,22 +874,34 @@ class ExpressivePreprocessor:
             if '\u2014' in text:
                 seg.pause_after_seconds = max(seg.pause_after_seconds, PAUSE_SECONDS["em_dash"])
             
-            parts = split_pattern.split(text)
+            parts = [p.strip() for p in split_pattern.split(text) if p.strip()]
             if len(parts) <= 1:
                 result.append(seg)
                 continue
             
-            for j, part in enumerate(parts):
-                part = part.strip()
-                if not part:
-                    continue
-                pause_after = seg.pause_after_seconds if j == len(parts) - 1 else 0.0
-                if re.search(r'[!]{2,}', part):
+            merged: list[str] = []
+            for part in parts:
+                if merged and len(merged[-1].split()) < min_words:
+                    merged[-1] = merged[-1] + ' ' + part
+                else:
+                    merged.append(part)
+            if len(merged) > 1 and len(merged[-1].split()) < min_words:
+                merged[-2] = merged[-2] + ' ' + merged[-1]
+                merged.pop()
+
+            for j, part in enumerate(merged):
+                pause_after = seg.pause_after_seconds if j == len(merged) - 1 else 0.0
+                speed = seg.speed
+                stripped = part.rstrip()
+                if re.search(r'[!]{2,}', stripped):
                     pause_after = max(pause_after, PAUSE_SECONDS["exclamation"])
-                elif part.endswith('!'):
+                    speed = min(seg.speed + 0.08, 1.2)
+                elif stripped.endswith('!'):
                     pause_after = max(pause_after, PAUSE_SECONDS["exclamation"])
-                elif part.endswith('?'):
+                    speed = min(seg.speed + 0.05, 1.15)
+                elif stripped.endswith('?'):
                     pause_after = max(pause_after, PAUSE_SECONDS["question"])
+                    speed = max(seg.speed - 0.03, 0.9)
                 
                 result.append(TextSegment(
                     text=part,
@@ -815,7 +909,7 @@ class ExpressivePreprocessor:
                     speaker=seg.speaker,
                     pause_before_seconds=seg.pause_before_seconds if j == 0 else 0.0,
                     pause_after_seconds=pause_after,
-                    speed=seg.speed,
+                    speed=speed,
                     pitch_shift=seg.pitch_shift,
                 ))
         
@@ -863,7 +957,7 @@ class ExpressivePreprocessor:
         remaining = text
 
         for thought in thought_texts:
-            if thought not in remaining:
+            if not thought or thought not in remaining:
                 continue
             
             before, _, after = remaining.partition(thought)
@@ -1052,7 +1146,7 @@ class ExpressivePreprocessor:
         return chunks
 
     def _split_into_sentences(self, text: str) -> list[str]:
-        return [s.strip() for s in re.split(r'(?<=[.!?])\s+', text) if s.strip()]
+        return [s.strip() for s in re.split(r'(?<=(?<!\.)[.!?])\s+(?=[A-Z])', text) if s.strip()]
 
     def _split_by_words(self, text: str, max_chars: int) -> list[str]:
         words = text.split()

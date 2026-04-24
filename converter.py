@@ -23,6 +23,7 @@ from log_store import LogStore
 from preprocessor import (
     ExpressivePreprocessor,
     ProcessedChapter,
+    ProcessedBook,
     TextSegment,
     SegmentType,
     generate_silence_samples,
@@ -96,6 +97,7 @@ class ConversionJob:
         log_queue: asyncio.Queue[LogEvent],
         log_store: LogStore,
         enable_expressive: bool = True,
+        preprocess_only: bool = False,
     ):
         self.job_state = job_state
         self.job_manager = job_manager
@@ -104,6 +106,7 @@ class ConversionJob:
         self.should_stop = Event()
         self.kokoro: Optional[Kokoro] = None
         self.enable_expressive = enable_expressive
+        self.preprocess_only = preprocess_only
         self.sample_rate = 24000
 
     def _emit_log(self, level: str, message: str, progress: float = 0.0, chapter: Optional[int] = None, chunk: Optional[int] = None):
@@ -155,6 +158,14 @@ class ConversionJob:
         
         if segment.pitch_shift != 0:
             audio = pitch_shift_audio(audio, sr, segment.pitch_shift)
+        
+        stripped = segment.text.rstrip()
+        if stripped.endswith('!!') or stripped.endswith('?!'):
+            audio = np.clip(audio * 1.25, -1.0, 1.0)
+        elif stripped.endswith('!'):
+            audio = np.clip(audio * 1.15, -1.0, 1.0)
+        elif stripped.endswith('?'):
+            audio = np.clip(audio * 1.05, -1.0, 1.0)
         
         audio = self._apply_fade(audio, sr)
         return audio
@@ -348,149 +359,200 @@ class ConversionJob:
         
         return chunk_index
 
+    def _preprocess_epub(self) -> Optional[ProcessedBook]:
+        raw_chapters = extract_chapters_with_html(self.job_state.epub_path)
+        if not raw_chapters:
+            self._emit_log("error", "No chapters found in EPUB")
+            return None
+
+        from voice_mapping_store import VoiceMappingStore
+        voice_store = VoiceMappingStore()
+        book_slug = voice_store.get_book_slug(self.job_state.epub_filename)
+        self._emit_log("info", f"Book: {book_slug}")
+
+        self.preprocessor = ExpressivePreprocessor(
+            narrator_voice=self.job_state.voice,
+            enable_speaker_detection=True,
+            use_booknlp=False,
+            book_slug=book_slug,
+        )
+
+        self._emit_log("info", "Speaker detection enabled")
+
+        content_chapters = [ch for ch in raw_chapters if _is_content_chapter(ch["html_content"])]
+        if not content_chapters:
+            content_chapters = raw_chapters
+        skipped = len(raw_chapters) - len(content_chapters)
+        if skipped:
+            self._emit_log("info", f"Skipped {skipped} title/metadata-only chapter(s)")
+
+        for idx, ch in enumerate(content_chapters, 1):
+            ch["order"] = idx
+            ch["title"] = clean_chapter_title(ch["title"])
+
+        processed_chapters: list[ProcessedChapter] = []
+
+        self._emit_log("info", f"Preprocessing {len(content_chapters)} chapters...")
+
+        for i, raw_chapter in enumerate(content_chapters, 1):
+            chapter_title = raw_chapter.get("title", f"Chapter {i}")
+            self._emit_log("info", f"Preprocessing chapter {i}/{len(content_chapters)}: {chapter_title}")
+
+            if self.preprocessor.using_booknlp:
+                self._emit_log("info", "  Running BookNLP speaker detection...")
+
+            processed = self.preprocessor.process_chapter_html(
+                raw_chapter["html_content"],
+                raw_chapter["title"],
+                raw_chapter["order"],
+            )
+
+            dialogue_count = sum(1 for s in processed.segments if s.segment_type.value == "dialogue")
+            speakers_in_chapter = set(s.speaker for s in processed.segments if s.speaker)
+
+            self._emit_log("info", f"  Found {len(processed.segments)} segments, {dialogue_count} dialogue lines")
+            if speakers_in_chapter:
+                self._emit_log("info", f"  Speakers: {', '.join(speakers_in_chapter)}")
+
+            processed_chapters.append(processed)
+
+        speaker_map = self.preprocessor.get_speaker_pitch_map()
+        if len(speaker_map) > 1:
+            speaker_list = ", ".join(f"{s}: {p:+.1f}st" for s, p in speaker_map.items() if s != "NARRATOR")
+            self._emit_log("info", f"Detected speakers: {speaker_list}")
+
+        self.preprocessor.save_voice_mappings()
+
+        return ProcessedBook(
+            epub_filename=self.job_state.epub_filename,
+            voice=self.job_state.voice,
+            chapters=processed_chapters,
+            speaker_pitch_map=self.preprocessor.speaker_tracker.speaker_pitch_shifts,
+            speaker_genders=self.preprocessor.speaker_tracker.speaker_genders,
+        )
+
+    def _synthesize_audio(self, processed_book: ProcessedBook, output_dir: Path) -> bool:
+        if not self._init_kokoro():
+            self.job_manager.update_job(
+                self.job_state.job_id, status=JobStatus.FAILED, error="Failed to initialize TTS"
+            )
+            return False
+
+        total_chunks = sum(
+            len(self.preprocessor.chunk_segments(ch.segments)) for ch in processed_book.chapters
+        )
+        self.total_chapters = len(processed_book.chapters)
+        self.job_manager.update_checkpoint(
+            self.job_state.job_id, 0, 0, self.total_chapters, total_chunks
+        )
+
+        self._emit_log("info", f"Found {self.total_chapters} chapters, {total_chunks} chunks")
+
+        start_chunk = self.job_state.current_chunk
+        chunk_index = 0
+
+        for chapter in processed_book.chapters:
+            if self.should_stop.is_set():
+                self._emit_log("info", "Conversion paused")
+                self.job_manager.update_job(self.job_state.job_id, status=JobStatus.PAUSED)
+                return False
+
+            chapter_wav_path = output_dir / f"chapter_{chapter.order:03d}.wav"
+            chapter_mp3_path = output_dir / f"chapter_{chapter.order:03d}.mp3"
+
+            chunks_in_chapter = len(self.preprocessor.chunk_segments(chapter.segments))
+
+            if chunk_index + chunks_in_chapter <= start_chunk:
+                chunk_index += chunks_in_chapter
+                continue
+
+            with sf.SoundFile(str(chapter_wav_path), mode='w', samplerate=self.sample_rate, channels=1) as wav_file:
+                chunk_index = self._process_chapter_expressive(
+                    chapter,
+                    wav_file,
+                    self.job_state.voice,
+                    chunk_index,
+                    total_chunks,
+                )
+
+            if self.should_stop.is_set():
+                if chapter_wav_path.exists():
+                    chapter_wav_path.unlink()
+                self._emit_log("info", "Conversion paused")
+                self.job_manager.update_job(self.job_state.job_id, status=JobStatus.PAUSED)
+                return False
+
+            self._emit_log("info", f"Normalizing audio for chapter {chapter.order}...")
+            self._normalize_chapter_audio(chapter_wav_path)
+
+            AudioSegment.from_wav(str(chapter_wav_path)).export(
+                str(chapter_mp3_path),
+                format="mp3",
+                bitrate="192k"
+            )
+            chapter_wav_path.unlink()
+
+            self._emit_log("info", f"Post-processing chapter {chapter.order}...")
+            self._postprocess_audio(chapter_mp3_path)
+            self._emit_log("info", f"Saved {chapter_mp3_path.name}")
+
+        return True
+
     def run(self) -> None:
         job_id = self.job_state.job_id
         output_dir = Path(self.job_state.output_dir)
         output_dir.mkdir(parents=True, exist_ok=True)
-        
+
         self.job_manager.update_job(job_id, status=JobStatus.RUNNING)
         self._emit_log("info", "Starting conversion...")
-        
-        if not self._init_kokoro():
-            self.job_manager.update_job(job_id, status=JobStatus.FAILED, error="Failed to initialize TTS")
-            return
-        
+
         try:
-            raw_chapters = extract_chapters_with_html(self.job_state.epub_path)
-            if not raw_chapters:
-                self._emit_log("error", "No chapters found in EPUB")
-                self.job_manager.update_job(job_id, status=JobStatus.FAILED, error="No chapters found")
+            processed_book_path = output_dir / "processed_book.json"
+
+            if processed_book_path.exists():
+                self._emit_log("info", "Loading preprocessed book from cache...")
+                processed_book = ProcessedBook.load(processed_book_path)
+                from voice_mapping_store import VoiceMappingStore
+                voice_store = VoiceMappingStore()
+                book_slug = voice_store.get_book_slug(self.job_state.epub_filename)
+                self.preprocessor = ExpressivePreprocessor(
+                    narrator_voice=self.job_state.voice,
+                    enable_speaker_detection=True,
+                    use_booknlp=False,
+                    book_slug=book_slug,
+                )
+                self.preprocessor.speaker_tracker.speaker_pitch_shifts = processed_book.speaker_pitch_map
+                self.preprocessor.speaker_tracker.speaker_genders = processed_book.speaker_genders
+            else:
+                processed_book = self._preprocess_epub()
+                if processed_book is None:
+                    self.job_manager.update_job(job_id, status=JobStatus.FAILED, error="No chapters found")
+                    return
+
+                processed_book.save(processed_book_path)
+                self._emit_log("info", f"Saved preprocessed book to {processed_book_path.name}")
+
+            if self.preprocess_only:
+                self._emit_log("info", "Preprocess-only mode: skipping TTS generation")
+                self.job_manager.update_job(job_id, status=JobStatus.COMPLETED, progress=100.0)
+                self._emit_log("info", "Preprocessing completed!", progress=100.0)
                 return
-            
-            from voice_mapping_store import VoiceMappingStore
-            voice_store = VoiceMappingStore()
-            book_slug = voice_store.get_book_slug(self.job_state.epub_filename)
-            self._emit_log("info", f"Book: {book_slug}")
-            
-            self.preprocessor = ExpressivePreprocessor(
-                narrator_voice=self.job_state.voice,
-                enable_speaker_detection=True,
-                use_booknlp=False,
-                book_slug=book_slug,
-            )
-            
-            self._emit_log("info", "Speaker detection enabled")
-            
-            content_chapters = [ch for ch in raw_chapters if _is_content_chapter(ch["html_content"])]
-            if not content_chapters:
-                content_chapters = raw_chapters
-            skipped = len(raw_chapters) - len(content_chapters)
-            if skipped:
-                self._emit_log("info", f"Skipped {skipped} title/metadata-only chapter(s)")
 
-            for idx, ch in enumerate(content_chapters, 1):
-                ch["order"] = idx
-                ch["title"] = clean_chapter_title(ch["title"])
+            if not self._synthesize_audio(processed_book, output_dir):
+                return
 
-            processed_chapters: list[ProcessedChapter] = []
-            total_chunks = 0
-            
-            self._emit_log("info", f"Preprocessing {len(content_chapters)} chapters...")
-            
-            for i, raw_chapter in enumerate(content_chapters, 1):
-                chapter_title = raw_chapter.get("title", f"Chapter {i}")
-                self._emit_log("info", f"Preprocessing chapter {i}/{len(content_chapters)}: {chapter_title}")
-                
-                if self.preprocessor.using_booknlp:
-                    self._emit_log("info", f"  Running BookNLP speaker detection...")
-                
-                processed = self.preprocessor.process_chapter_html(
-                    raw_chapter["html_content"],
-                    raw_chapter["title"],
-                    raw_chapter["order"],
-                )
-                
-                dialogue_count = sum(1 for s in processed.segments if s.segment_type.value == "dialogue")
-                speakers_in_chapter = set(s.speaker for s in processed.segments if s.speaker)
-                
-                self._emit_log("info", f"  Found {len(processed.segments)} segments, {dialogue_count} dialogue lines")
-                if speakers_in_chapter:
-                    self._emit_log("info", f"  Speakers: {', '.join(speakers_in_chapter)}")
-                
-                processed_chapters.append(processed)
-                total_chunks += len(self.preprocessor.chunk_segments(processed.segments))
-            
-            self.total_chapters = len(processed_chapters)
-            self.job_manager.update_checkpoint(job_id, 0, 0, self.total_chapters, total_chunks)
-            
-            speaker_map = self.preprocessor.get_speaker_pitch_map()
-            if len(speaker_map) > 1:
-                speaker_list = ", ".join(f"{s}: {p:+.1f}st" for s, p in speaker_map.items() if s != "NARRATOR")
-                self._emit_log("info", f"Detected speakers: {speaker_list}")
-            
-            self._emit_log("info", f"Found {self.total_chapters} chapters, {total_chunks} chunks")
-            
-            start_chunk = self.job_state.current_chunk
-            chunk_index = 0
-            
-            for chapter in processed_chapters:
-                if self.should_stop.is_set():
-                    self._emit_log("info", "Conversion paused")
-                    self.job_manager.update_job(job_id, status=JobStatus.PAUSED)
-                    return
-                
-                chapter_wav_path = output_dir / f"chapter_{chapter.order:03d}.wav"
-                chapter_mp3_path = output_dir / f"chapter_{chapter.order:03d}.mp3"
-                
-                chunks_in_chapter = len(self.preprocessor.chunk_segments(chapter.segments))
-                
-                if chunk_index + chunks_in_chapter <= start_chunk:
-                    chunk_index += chunks_in_chapter
-                    continue
-                
-                with sf.SoundFile(str(chapter_wav_path), mode='w', samplerate=self.sample_rate, channels=1) as wav_file:
-                    chunk_index = self._process_chapter_expressive(
-                        chapter,
-                        wav_file,
-                        self.job_state.voice,
-                        chunk_index,
-                        total_chunks,
-                    )
-                
-                if self.should_stop.is_set():
-                    if chapter_wav_path.exists():
-                        chapter_wav_path.unlink()
-                    self._emit_log("info", "Conversion paused")
-                    self.job_manager.update_job(job_id, status=JobStatus.PAUSED)
-                    return
-                
-                self._emit_log("info", f"Normalizing audio for chapter {chapter.order}...")
-                self._normalize_chapter_audio(chapter_wav_path)
-                
-                AudioSegment.from_wav(str(chapter_wav_path)).export(
-                    str(chapter_mp3_path),
-                    format="mp3",
-                    bitrate="192k"
-                )
-                chapter_wav_path.unlink()
-                
-                self._emit_log("info", f"Post-processing chapter {chapter.order}...")
-                self._postprocess_audio(chapter_mp3_path)
-                self._emit_log("info", f"Saved {chapter_mp3_path.name}")
-            
-            self.preprocessor.save_voice_mappings()
             speaker_map = self.preprocessor.get_speaker_pitch_map()
             if len(speaker_map) > 1:
                 self._emit_log("info", f"Saved pitch mappings for {len(speaker_map) - 1} speakers")
-            
+
             self._emit_log("info", "Generating M4B audiobook...")
             self._generate_m4b(output_dir, self.job_state.epub_filename)
-            
+
             self.job_manager.update_job(job_id, status=JobStatus.COMPLETED, progress=100.0)
             self._emit_log("info", "Conversion completed!", progress=100.0)
-            
+
             self._copy_to_final_path(output_dir)
-            
+
         except Exception as e:
             self._emit_log("error", f"Conversion failed: {e}")
             self.job_manager.update_job(job_id, status=JobStatus.FAILED, error=str(e))

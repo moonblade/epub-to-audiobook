@@ -2,6 +2,72 @@
 
 All notable changes to this project will be documented in this file.
 
+## [PR #8] - 2026-04-24 - Two-Phase Processing Pipeline & Debug Mode
+
+Refactored the conversion pipeline to separate text preprocessing from TTS synthesis, enabling caching and debug workflows.
+
+#### Architecture Changes
+- **Two-phase pipeline**: Text preprocessing now completes entirely before TTS begins
+- **Intermediate format**: Preprocessed chapters saved as `processed_book.json` with all segments, speaker mappings, and prosody data
+- **Caching**: Subsequent runs skip preprocessing if `processed_book.json` exists
+
+#### New Features
+- **Preprocess-only mode**: `preprocess_only=True` parameter to run text processing without TTS
+- **Debug workflow**: Inspect `processed_book.json` to verify preprocessing before committing to audio generation
+- **ProcessedBook model**: New `ProcessedBook` and updated `ProcessedChapter` classes with `to_dict()`, `from_dict()`, `save()`, `load()` methods
+
+#### API Changes
+- `POST /upload`: Added `preprocess_only` form parameter (default: `false`)
+- `POST /convert-from-browse`: Added `preprocess_only` form parameter (default: `false`)
+
+#### Files Changed
+- `preprocessor.py`: Added `ProcessedBook` dataclass with serialization
+- `converter.py`: Split `run()` into `_preprocess_epub()` and `_synthesize_audio()` phases
+- `main.py`: Added `preprocess_only` parameter to upload endpoints
+
+## [PR #7] - 2026-04-17 - Audio Quality Enhancements & M4B Output
+
+Major audio pipeline overhaul with normalization, prosody improvements, and M4B audiobook generation.
+
+#### Audio Pipeline
+- **LUFS normalization**: Two-pass ffmpeg loudnorm targeting -16 LUFS (ACX standard) per chapter
+- **Segment crossfade**: 30ms fade-in/fade-out on every synthesized segment to eliminate hard cuts
+- **Audio post-processing**: Gentle dynamic compression (3:1 ratio) + low-shelf EQ boost (120Hz) + presence boost (3kHz)
+- **Volume boost for exclamations**: `!` segments get +15% gain, `!!`/`?!` get +25%, `?` gets +5%
+
+#### Prosody Improvements
+- **Paragraph pause fix**: Pause only applied to first segment of each `<p>`, not every segment (was causing 0.8s dead air between dialogue exchanges)
+- **Punctuation-aware splitting**: Exclamatory sentences split at `!`/`?` boundaries with micro-pauses, but short segments (<4 words) are merged to avoid isolated utterances like "Why?" being synthesized alone
+- **Attribution separation**: "Mordred said. He cleared his throat." → two segments with tight pacing
+- **Speed variation**: Exclamations at 1.10x, double-exclamations at 1.13x, questions slightly slower at 1.02x
+
+#### Text Normalization
+- Numbers to words (`$500` → `five hundred dollars`, `3rd` → `3rd`)
+- Abbreviations expanded (`Dr.` → `Doctor`, `etc.` → `etcetera`)
+- **Stutter normalization**: `I..I` → `I-I` (hyphen form for natural TTS)
+- **Interjection elongation**: `ah` → `ahh`, `oh` → `ohh`, `uh` → `uhh`, `hm` → `hmm` (prevents distorted short utterances)
+- Sentence splitter made ellipsis-aware (won't split `"I think... Maybe"` at the dots)
+- Symbols: `&` → `and`, `/` → `or`
+
+#### Chapter Handling
+- **Skip metadata chapters**: Chapters with <100 chars or <5 content blocks auto-skipped
+- **Clean chapter titles**: Date prefix and book name stripped (`2026-04-16 - Book - Chapter 1: Title` → `Chapter 1: Title`)
+- **Duplicate heading skip**: Heading elements matching the chapter title no longer read as narration
+- **Speaker detection on by default**: Characters get distinct pitch shifts in dialogue
+
+#### M4B Audiobook Output
+- All chapter MP3s combined into a single `.m4b` file with chapter markers via ffmpeg
+- New endpoint: `GET /jobs/{id}/audiobook` for M4B download
+- M4B files included in final path copy
+
+#### UI Improvements
+- **Inline audio player**: Play/pause per chapter on the logs page with native browser controls
+- **M4B download button**: "Download Full Audiobook (M4B)" at top of chapters section
+
+#### Dev Workflow
+- `make stop`: Kill process on PORT via lsof
+- `EPUBTOAUDIO_BROWSE_PATH` set to `~/Downloads` for local `make run`
+
 ## [PR #6] - 2026-04-17 - Browse Files from Mounted Directory
 
 Added ability to browse and convert EPUB files from a mounted directory instead of uploading.

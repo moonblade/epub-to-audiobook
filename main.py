@@ -79,8 +79,9 @@ async def upload_epub(
     voice: str = Form(default=DEFAULT_VOICE),
     upload_path: Optional[str] = Form(default=None),
     output_path: Optional[str] = Form(default=None),
+    preprocess_only: bool = Form(default=False),
 ):
-    if not file.filename.lower().endswith(".epub"):
+    if not file.filename or not file.filename.lower().endswith(".epub"):
         raise HTTPException(status_code=400, detail="Only EPUB files are allowed")
     
     try:
@@ -112,15 +113,16 @@ async def upload_epub(
     log_queue: asyncio.Queue[LogEvent] = asyncio.Queue(maxsize=1000)
     log_queues[job_id] = log_queue
     
-    conversion_job = ConversionJob(job_state, job_manager, log_queue, log_store)
+    conversion_job = ConversionJob(job_state, job_manager, log_queue, log_store, preprocess_only=preprocess_only)
     active_jobs[job_id] = conversion_job
     
     executor.submit(lambda: conversion_job.run())
     
+    message = f"Preprocessing started for {file.filename}" if preprocess_only else f"Conversion started for {file.filename}"
     return UploadResponse(
         job_id=job_id,
         status="started",
-        message=f"Conversion started for {file.filename}",
+        message=message,
     )
 
 
@@ -333,7 +335,7 @@ async def preprocess_epub(
     voice: str = Form(default=DEFAULT_VOICE),
     chapter: Optional[int] = Query(default=None, description="Process only this chapter (1-indexed)"),
 ):
-    if not file.filename.lower().endswith(".epub"):
+    if not file.filename or not file.filename.lower().endswith(".epub"):
         raise HTTPException(status_code=400, detail="Only EPUB files are allowed")
 
     try:
@@ -453,6 +455,7 @@ async def convert_from_browse(
     file_path: str = Form(...),
     voice: str = Form(default=DEFAULT_VOICE),
     output_path: Optional[str] = Form(default=None),
+    preprocess_only: bool = Form(default=False),
 ):
     if not BROWSE_PATH:
         raise HTTPException(status_code=400, detail="Browse feature not enabled")
@@ -493,15 +496,16 @@ async def convert_from_browse(
     log_queue: asyncio.Queue[LogEvent] = asyncio.Queue(maxsize=1000)
     log_queues[job_id] = log_queue
 
-    conversion_job = ConversionJob(job_state, job_manager, log_queue, log_store)
+    conversion_job = ConversionJob(job_state, job_manager, log_queue, log_store, preprocess_only=preprocess_only)
     active_jobs[job_id] = conversion_job
 
     executor.submit(lambda: conversion_job.run())
 
+    message = f"Preprocessing started for {epub_path.name}" if preprocess_only else f"Conversion started for {epub_path.name}"
     return UploadResponse(
         job_id=job_id,
         status="started",
-        message=f"Conversion started for {epub_path.name}",
+        message=message,
     )
 
 
